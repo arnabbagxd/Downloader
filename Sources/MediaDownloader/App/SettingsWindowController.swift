@@ -132,7 +132,7 @@ private final class GeneralSettingsCard: NSView {
         icon.imageScaling = .scaleProportionallyUpOrDown
         icon.translatesAutoresizingMaskIntoConstraints = false
 
-        let title = NSTextField(labelWithString: "MediaDownloader")
+        let title = NSTextField(labelWithString: "Download It")
         title.font = .systemFont(ofSize: 17, weight: .regular)
         title.textColor = .labelColor
         title.translatesAutoresizingMaskIntoConstraints = false
@@ -349,9 +349,7 @@ private final class HotKeyRecorderButton: NSButton {
         shortcutLabel.isSelectable = false
         shortcutLabel.backgroundColor = .clear
 
-        let symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12.5, weight: .regular)
-        closeImageView.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: nil)?
-            .withSymbolConfiguration(symbolConfiguration)
+        closeImageView.image = LucideIconStore.menuImage("x", pointSize: 13)
         closeImageView.contentTintColor = NSColor.labelColor.withAlphaComponent(0.82)
         closeImageView.imageScaling = .scaleProportionallyDown
         closeImageView.translatesAutoresizingMaskIntoConstraints = false

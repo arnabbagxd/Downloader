@@ -14,8 +14,22 @@ struct HistoryRowView: View {
     let onEdit: () -> Void
     let onHoverChange: (Bool) -> Void
     @State private var isHovering = false
+    @State private var dragOffset: CGFloat = 0
+
+    // Swipe left past this distance to delete the row.
+    private let deleteThreshold: CGFloat = 96
 
     var body: some View {
+        ZStack(alignment: .trailing) {
+            deleteReveal
+            rowContent
+                .offset(x: dragOffset)
+                .gesture(swipeGesture)
+        }
+        .frame(height: 74)
+    }
+
+    private var rowContent: some View {
         HStack(spacing: 14) {
             ThumbnailView(path: item.thumbnailPath)
                 .frame(width: 72, height: 54)
@@ -36,10 +50,11 @@ struct HistoryRowView: View {
             Spacer(minLength: 14)
 
             HStack(spacing: 4) {
-                IconButton(systemName: "scissors", help: "Edit trim", action: onEdit)
+                IconButton(iconName: "scissors", help: "Edit trim", action: onEdit)
                 IconButton(
-                    systemName: copySucceeded ? "checkmark" : "doc.on.doc",
+                    iconName: copySucceeded ? "check" : "copy",
                     help: "Copy file",
+                    tint: copySucceeded ? .appAccent : .secondary,
                     action: copyFile
                 )
                 MoreIconButton(
@@ -54,15 +69,53 @@ struct HistoryRowView: View {
         .frame(height: 74)
         .background {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(isKeyboardSelected ? Color.primary.opacity(0.055) : Color.clear)
+                .fill(isKeyboardSelected ? Color.appAccent.opacity(0.14) : Color.clear)
         }
         .contentShape(Rectangle())
+        .scaleEffect(isHovering && !suppressHoverHighlight && dragOffset == 0 ? 1.012 : 1)
         .onHover {
             isHovering = $0
             onHoverChange($0)
         }
-        .animation(.easeOut(duration: 0.12), value: isHovering)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isHovering)
         .animation(.easeOut(duration: 0.12), value: isKeyboardSelected)
+    }
+
+    private var deleteReveal: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            ZStack {
+                Color.red.opacity(0.92)
+                LucideIcon(name: "trash-2", size: 20)
+                    .foregroundStyle(.white)
+                    .opacity(revealProgress)
+                    .scaleEffect(0.6 + 0.4 * revealProgress)
+            }
+            .frame(width: max(0, -dragOffset))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+    }
+
+    private var revealProgress: Double {
+        Double(min(1, max(0, -dragOffset / deleteThreshold)))
+    }
+
+    private var swipeGesture: some Gesture {
+        DragGesture(minimumDistance: 10)
+            .onChanged { value in
+                // Only allow leftward swipes, with a little resistance past the threshold.
+                dragOffset = value.translation.width < 0 ? max(value.translation.width, -160) : 0
+            }
+            .onEnded { value in
+                if -value.translation.width > deleteThreshold {
+                    onDelete()
+                    dragOffset = 0
+                } else {
+                    withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                        dragOffset = 0
+                    }
+                }
+            }
     }
 
     private func copyFile() {
@@ -79,17 +132,16 @@ private struct MoreIconButton: View {
 
     var body: some View {
         Button(action: showMenu) {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 14, weight: .medium))
+            LucideIcon(name: "ellipsis", size: 16)
                 .frame(width: 30, height: 30)
                 .background {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(isHovering ? Color.primary.opacity(0.095) : Color.primary.opacity(0.04))
+                        .fill(isHovering ? Color.appAccent.opacity(0.16) : Color.primary.opacity(0.04))
                 }
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(isHovering ? Color.appAccent : Color.secondary)
         .help("More")
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.1), value: isHovering)
@@ -102,10 +154,10 @@ private struct MoreIconButton: View {
 
         let menu = NSMenu()
         menu.autoenablesItems = false
-        menu.addItem(actionItem(title: "Open in Finder", systemImage: "folder", action: onReveal))
-        menu.addItem(actionItem(title: "Open Link", systemImage: "arrow.up.right.square", action: onOpenSource))
+        menu.addItem(actionItem(title: "Open in Finder", iconName: "folder", action: onReveal))
+        menu.addItem(actionItem(title: "Open Link", iconName: "external-link", action: onOpenSource))
         menu.addItem(.separator())
-        menu.addItem(actionItem(title: "Delete", systemImage: "trash", action: onDelete))
+        menu.addItem(actionItem(title: "Delete", iconName: "trash-2", action: onDelete))
 
         let pointInWindow = NSPoint(
             x: NSEvent.mouseLocation.x - contentView.window!.frame.minX,
@@ -115,12 +167,12 @@ private struct MoreIconButton: View {
         menu.popUp(positioning: nil, at: pointInView, in: contentView)
     }
 
-    private func actionItem(title: String, systemImage: String, action: @escaping () -> Void) -> NSMenuItem {
+    private func actionItem(title: String, iconName: String, action: @escaping () -> Void) -> NSMenuItem {
         let target = MenuActionTarget(action)
         let item = NSMenuItem(title: title, action: #selector(MenuActionTarget.performAction), keyEquivalent: "")
         item.target = target
         item.representedObject = target
-        item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: title)
+        item.image = LucideIconStore.menuImage(iconName)
         return item
     }
 }
@@ -138,24 +190,24 @@ private final class MenuActionTarget: NSObject {
 }
 
 private struct IconButton: View {
-    let systemName: String
+    let iconName: String
     let help: String
+    var tint: Color = .secondary
     let action: () -> Void
     @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 14, weight: .medium))
+            LucideIcon(name: iconName, size: 16)
                 .frame(width: 30, height: 30)
                 .background {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(isHovering ? Color.primary.opacity(0.095) : Color.primary.opacity(0.04))
+                        .fill(isHovering ? Color.appAccent.opacity(0.16) : Color.primary.opacity(0.04))
                 }
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(isHovering ? Color.appAccent : tint)
         .help(help)
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.1), value: isHovering)
@@ -180,7 +232,7 @@ private struct ThumbnailView: View {
                         Rectangle()
                             .fill(.quaternary)
 
-                        Image(systemName: "photo")
+                        LucideIcon(name: "image", size: 22)
                             .foregroundStyle(.secondary)
                     }
                     .frame(width: size.width, height: size.height)

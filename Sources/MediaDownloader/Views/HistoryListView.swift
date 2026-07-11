@@ -41,6 +41,12 @@ struct HistoryListView: View {
                             }
                         )
                         .id(item.id)
+                        .transition(.asymmetric(
+                            insertion: .scale(scale: 0.94, anchor: .top)
+                                .combined(with: .opacity)
+                                .combined(with: .move(edge: .top)),
+                            removal: .opacity.combined(with: .scale(scale: 0.96))
+                        ))
                     }
                 }
                 .padding(.horizontal, 12)

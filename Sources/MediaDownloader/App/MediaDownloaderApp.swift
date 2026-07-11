@@ -108,6 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let contentView = NSHostingView(
             rootView: ContentView(model: model)
                 .frame(width: windowSize.width, height: windowSize.height)
+                .tint(.appAccent)
         )
 
         let window = SpotlightWindow(
@@ -124,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.isMovableByWindowBackground = false
         window.level = .normal
         window.collectionBehavior = [.moveToActiveSpace]
-        window.title = "Media Downloader"
+        window.title = "Download It"
         centerWindowOnCurrentDisplay(window)
 
         self.window = window
@@ -149,7 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.isMovableByWindowBackground = true
         window.level = .normal
         window.collectionBehavior = [.moveToActiveSpace]
-        window.title = "Media Downloader Setup"
+        window.title = "Download It Setup"
 
         self.setupWindow = window
         return window
@@ -163,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onCheckAgain: checkDependenciesAgain
             )
             .frame(width: 520, height: 360)
+            .tint(.appAccent)
         )
     }
 

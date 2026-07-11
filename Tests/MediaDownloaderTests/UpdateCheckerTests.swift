@@ -18,14 +18,14 @@ final class UpdateCheckerTests: XCTestCase {
     }
 
     func testDownloadFileNameFallsBackToAssetURLName() {
-        let url = URL(string: "https://github.com/pixel-point/media-downloader/releases/download/v1.2.3/MediaDownloader.zip")!
+        let url = URL(string: "https://github.com/arnabbagxd/Downloader/releases/download/v1.2.3/DownloadIt.zip")!
 
-        XCTAssertEqual(UpdateChecker.downloadFileName(from: nil, fallbackURL: url), "MediaDownloader.zip")
+        XCTAssertEqual(UpdateChecker.downloadFileName(from: nil, fallbackURL: url), "DownloadIt.zip")
     }
 
     func testDownloadFileNameHandlesEmptyFallbackURLName() {
-        let url = URL(string: "https://github.com/pixel-point/media-downloader/releases/download/v1.2.3/")!
+        let url = URL(string: "https://github.com/arnabbagxd/Downloader/releases/download/v1.2.3/")!
 
-        XCTAssertEqual(UpdateChecker.downloadFileName(from: nil, fallbackURL: url), "MediaDownloader-update.zip")
+        XCTAssertEqual(UpdateChecker.downloadFileName(from: nil, fallbackURL: url), "DownloadIt-update.zip")
     }
 }

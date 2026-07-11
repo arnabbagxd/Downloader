@@ -35,7 +35,7 @@ struct UpdateChecker {
     private let session: URLSession
 
     init(
-        repository: String = "pixel-point/media-downloader",
+        repository: String = "arnabbagxd/Downloader",
         session: URLSession = .shared
     ) {
         latestReleaseURL = URL(string: "https://api.github.com/repos/\(repository)/releases/latest")!
@@ -45,7 +45,7 @@ struct UpdateChecker {
     func check(currentVersion: String) async throws -> UpdateCheckResult {
         var request = URLRequest(url: latestReleaseURL)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("MediaDownloader", forHTTPHeaderField: "User-Agent")
+        request.setValue("DownloadIt", forHTTPHeaderField: "User-Agent")
 
         let (data, response) = try await session.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse, 200..<300 ~= httpResponse.statusCode else {
@@ -71,7 +71,7 @@ struct UpdateChecker {
         }
 
         var request = URLRequest(url: downloadURL)
-        request.setValue("MediaDownloader", forHTTPHeaderField: "User-Agent")
+        request.setValue("DownloadIt", forHTTPHeaderField: "User-Agent")
 
         let (temporaryURL, response) = try await session.download(for: request)
         let fileName = Self.downloadFileName(from: response, fallbackURL: downloadURL)
@@ -85,17 +85,27 @@ struct UpdateChecker {
     }
 
     static func downloadFileName(from response: URLResponse?, fallbackURL: URL) -> String {
-        if let suggestedFileName = response?.suggestedFilename, !suggestedFileName.isEmpty {
-            return suggestedFileName
+        if let suggested = response?.suggestedFilename, let safe = sanitizedFileName(suggested) {
+            return safe
         }
 
-        let fallbackName = fallbackURL.lastPathComponent
-        let lowercaseName = fallbackName.lowercased()
-        guard !fallbackName.isEmpty, lowercaseName.hasSuffix(".zip") || lowercaseName.hasSuffix(".dmg") else {
-            return "MediaDownloader-update.zip"
+        if let safe = sanitizedFileName(fallbackURL.lastPathComponent) {
+            return safe
         }
 
-        return fallbackName
+        return "DownloadIt-update.zip"
+    }
+
+    /// Reduces a server-supplied name to a bare, safe filename ending in .zip/.dmg,
+    /// preventing path traversal via components like "../".
+    private static func sanitizedFileName(_ raw: String) -> String? {
+        let base = (raw as NSString).lastPathComponent
+        let lowercased = base.lowercased()
+        guard !base.isEmpty, base != "..", base != ".",
+              lowercased.hasSuffix(".zip") || lowercased.hasSuffix(".dmg") else {
+            return nil
+        }
+        return base
     }
 
     private static func updateDownloadDirectory(for version: String) throws -> URL {

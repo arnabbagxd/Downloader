@@ -20,20 +20,33 @@ enum MediaDownloaderError: LocalizedError {
 actor MediaDownloaderService {
     private let fileManager = FileManager.default
 
-    func download(sourceURL: String, destinationFolder: URL) async throws -> DownloadResult {
+    func download(
+        sourceURL: String,
+        destinationFolder: URL,
+        formatSelector: String? = nil,
+        onProgress: (@Sendable (Double) -> Void)? = nil
+    ) async throws -> DownloadResult {
         try await requireTool("yt-dlp")
         try await requireTool("ffmpeg")
         try fileManager.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
 
         let startDate = Date()
-        let arguments = [
+        var arguments = [
             "yt-dlp",
             "--no-playlist",
-            "--no-progress",
+            "--newline",
             "--restrict-filenames",
             "--merge-output-format", "mp4",
             "--recode-video", "mp4",
-            "-S", "vcodec:h264,acodec:aac,ext:mp4:m4a",
+            "-S", "vcodec:h264,acodec:aac,ext:mp4:m4a"
+        ]
+
+        // Cap the resolution when the user picked a specific quality.
+        if let formatSelector {
+            arguments += ["-f", formatSelector]
+        }
+
+        arguments += [
             "--paths", destinationFolder.path,
             "--output", "%(title).180B [%(id)s].%(ext)s",
             "--print", "after_move:%(filepath)s",
@@ -41,7 +54,15 @@ actor MediaDownloaderService {
             sourceURL
         ]
 
-        let output = try await runProcess(executable: "/usr/bin/env", arguments: arguments)
+        // Track the highest percentage seen so the ring only ever moves forward,
+        // even though yt-dlp reports separate 0-100% passes for video and audio.
+        let highestProgress = ProgressTracker()
+        let output = try await runProcess(executable: "/usr/bin/env", arguments: arguments) { line in
+            guard let onProgress, let fraction = Self.parseProgress(from: line) else { return }
+            if let advanced = highestProgress.advance(to: fraction) {
+                onProgress(advanced)
+            }
+        }
         let lines = output
             .split(whereSeparator: \.isNewline)
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -51,6 +72,48 @@ actor MediaDownloaderService {
         let fileURL = try filePath.map(URL.init(fileURLWithPath:)) ?? newestMediaFile(in: destinationFolder, after: startDate)
         let title = lines.last(where: { !$0.hasPrefix("/") }) ?? fileURL.deletingPathExtension().lastPathComponent
         return DownloadResult(fileURL: fileURL, title: title)
+    }
+
+    /// Fetches a video's title and the distinct heights it offers (highest first), without downloading.
+    func probe(sourceURL: String) async throws -> VideoProbe {
+        try await requireTool("yt-dlp")
+
+        let output = try await runProcess(executable: "/usr/bin/env", arguments: [
+            "yt-dlp", "--no-playlist", "--no-warnings", "-J", sourceURL
+        ])
+
+        guard let data = output.data(using: .utf8),
+              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return VideoProbe(title: nil, heights: [])
+        }
+
+        var heights = Set<Int>()
+
+        if let formats = json["formats"] as? [[String: Any]] {
+            for format in formats {
+                // Skip audio-only formats.
+                if let vcodec = format["vcodec"] as? String, vcodec == "none" { continue }
+                if let height = intValue(format["height"]), height > 0 {
+                    heights.insert(height)
+                }
+            }
+        }
+
+        // Some extractors report a single muxed height at the top level with no formats array.
+        if heights.isEmpty, let height = intValue(json["height"]), height > 0 {
+            heights.insert(height)
+        }
+
+        let rawTitle = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = (rawTitle?.isEmpty == false) ? rawTitle : nil
+
+        return VideoProbe(title: title, heights: heights.sorted(by: >))
+    }
+
+    private func intValue(_ value: Any?) -> Int? {
+        if let int = value as? Int { return int }
+        if let double = value as? Double { return Int(double) }
+        return nil
     }
 
     private func requireTool(_ tool: String) async throws {
@@ -85,7 +148,11 @@ actor MediaDownloaderService {
         return newest
     }
 
-    private func runProcess(executable: String, arguments: [String]) async throws -> String {
+    private func runProcess(
+        executable: String,
+        arguments: [String],
+        onLine: (@Sendable (String) -> Void)? = nil
+    ) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             let stdout = Pipe()
@@ -97,12 +164,23 @@ actor MediaDownloaderService {
             process.standardOutput = stdout
             process.standardError = stderr
 
-            process.terminationHandler = { process in
-                let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
-                let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: outputData, encoding: .utf8) ?? ""
-                let error = String(data: errorData, encoding: .utf8) ?? ""
+            // Collect output as it streams so progress lines can be parsed live.
+            let collector = OutputCollector(onLine: onLine)
+            stdout.fileHandleForReading.readabilityHandler = { handle in
+                collector.appendStdout(handle.availableData)
+            }
+            stderr.fileHandleForReading.readabilityHandler = { handle in
+                collector.appendStderr(handle.availableData)
+            }
 
+            process.terminationHandler = { process in
+                stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
+                // Drain anything buffered after the last readability callback.
+                collector.appendStdout(stdout.fileHandleForReading.readDataToEndOfFile())
+                collector.appendStderr(stderr.fileHandleForReading.readDataToEndOfFile())
+
+                let (output, error) = collector.finish()
                 if process.terminationStatus == 0 {
                     continuation.resume(returning: output)
                 } else {
@@ -115,6 +193,101 @@ actor MediaDownloaderService {
             } catch {
                 continuation.resume(throwing: error)
             }
+        }
+    }
+
+    /// Extracts a 0.0-1.0 fraction from a yt-dlp progress line like "[download]  42.3% of ...".
+    static func parseProgress(from line: String) -> Double? {
+        guard line.contains("[download]"), let percentRange = line.range(of: "%") else {
+            return nil
+        }
+
+        // Walk backwards from the '%' to grab the number in front of it.
+        var digits = ""
+        var index = percentRange.lowerBound
+        while index > line.startIndex {
+            index = line.index(before: index)
+            let character = line[index]
+            if character.isNumber || character == "." {
+                digits.insert(character, at: digits.startIndex)
+            } else if character == " " {
+                if digits.isEmpty { continue }
+                break
+            } else {
+                break
+            }
+        }
+
+        guard let value = Double(digits) else { return nil }
+        return min(max(value / 100.0, 0), 1)
+    }
+}
+
+/// Thread-safe holder that only lets the reported progress move forward.
+private final class ProgressTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var highest = 0.0
+
+    func advance(to fraction: Double) -> Double? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard fraction > highest else { return nil }
+        highest = fraction
+        return fraction
+    }
+}
+
+/// Accumulates process output off the main thread and emits complete lines as they arrive.
+private final class OutputCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private let onLine: (@Sendable (String) -> Void)?
+    private var stdoutData = Data()
+    private var stderrData = Data()
+    private var lineBuffer = ""
+
+    init(onLine: (@Sendable (String) -> Void)?) {
+        self.onLine = onLine
+    }
+
+    func appendStdout(_ data: Data) {
+        guard !data.isEmpty else { return }
+        lock.lock()
+        stdoutData.append(data)
+        lock.unlock()
+        emitLines(from: data)
+    }
+
+    func appendStderr(_ data: Data) {
+        guard !data.isEmpty else { return }
+        lock.lock()
+        stderrData.append(data)
+        lock.unlock()
+        // yt-dlp writes progress to stdout, but parse stderr too in case that changes.
+        emitLines(from: data)
+    }
+
+    func finish() -> (stdout: String, stderr: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (
+            String(data: stdoutData, encoding: .utf8) ?? "",
+            String(data: stderrData, encoding: .utf8) ?? ""
+        )
+    }
+
+    private func emitLines(from data: Data) {
+        guard let onLine, let chunk = String(data: data, encoding: .utf8) else { return }
+
+        lock.lock()
+        lineBuffer += chunk
+        // yt-dlp uses both \n (with --newline) and \r for in-place progress updates.
+        let normalized = lineBuffer.replacingOccurrences(of: "\r", with: "\n")
+        var pieces = normalized.components(separatedBy: "\n")
+        lineBuffer = pieces.removeLast()
+        lock.unlock()
+
+        for piece in pieces where !piece.isEmpty {
+            onLine(piece)
         }
     }
 }

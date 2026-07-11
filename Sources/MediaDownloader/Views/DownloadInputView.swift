@@ -4,6 +4,7 @@ import SwiftUI
 struct DownloadInputView: View {
     @Binding var text: String
     let isDownloading: Bool
+    let progress: Double
     let folderName: String
     let onSubmit: () -> Void
     let onPaste: () -> Void
@@ -15,6 +16,9 @@ struct DownloadInputView: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            LucideIcon(name: "link", size: 18)
+                .foregroundStyle(Color.primary.opacity(0.4))
+
             PasteAwareTextField(
                 text: $text,
                 placeholder: "Paste Instagram, X, or YouTube URL",
@@ -25,8 +29,8 @@ struct DownloadInputView: View {
             .frame(height: 36)
 
             if isDownloading {
-                CircularDownloadIndicator()
-                    .frame(width: 24, height: 24)
+                CircularDownloadIndicator(progress: progress)
+                    .frame(width: 30, height: 30)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
             }
 
@@ -61,8 +65,7 @@ private struct InputSettingsButton: View {
 
     var body: some View {
         Button(action: showMenu) {
-            Image(systemName: "gearshape")
-                .font(.system(size: 16, weight: .medium))
+            LucideIcon(name: "settings", size: 17)
                 .frame(width: 28, height: 28)
                 .contentShape(Rectangle())
         }
@@ -78,10 +81,10 @@ private struct InputSettingsButton: View {
 
         let menu = NSMenu()
         menu.autoenablesItems = false
-        menu.addItem(actionItem(title: "Settings", systemImage: "gearshape", action: onOpenSettings))
-        menu.addItem(actionItem(title: "Change Folder", systemImage: "folder", action: onChooseFolder))
+        menu.addItem(actionItem(title: "Settings", iconName: "settings", action: onOpenSettings))
+        menu.addItem(actionItem(title: "Change Folder", iconName: "folder", action: onChooseFolder))
         menu.addItem(.separator())
-        menu.addItem(actionItem(title: "Clear History", systemImage: "trash", action: onClearHistory))
+        menu.addItem(actionItem(title: "Clear History", iconName: "trash-2", action: onClearHistory))
 
         let pointInWindow = NSPoint(
             x: NSEvent.mouseLocation.x - contentView.window!.frame.minX,
@@ -91,12 +94,12 @@ private struct InputSettingsButton: View {
         menu.popUp(positioning: nil, at: pointInView, in: contentView)
     }
 
-    private func actionItem(title: String, systemImage: String, action: @escaping () -> Void) -> NSMenuItem {
+    private func actionItem(title: String, iconName: String, action: @escaping () -> Void) -> NSMenuItem {
         let target = InputMenuActionTarget(action)
         let item = NSMenuItem(title: title, action: #selector(InputMenuActionTarget.performAction), keyEquivalent: "")
         item.target = target
         item.representedObject = target
-        item.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: title)
+        item.image = LucideIconStore.menuImage(iconName)
         return item
     }
 }
@@ -114,20 +117,40 @@ private final class InputMenuActionTarget: NSObject {
 }
 
 private struct CircularDownloadIndicator: View {
+    let progress: Double
     @State private var rotation: Double = 0
+
+    // Below this we don't have a real percentage yet, so show the spinning arc.
+    private var isIndeterminate: Bool { progress < 0.001 }
 
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color.primary.opacity(0.12), lineWidth: 2.4)
+                .stroke(Color.primary.opacity(0.12), lineWidth: 2.6)
 
-            Circle()
-                .trim(from: 0.08, to: 0.74)
-                .stroke(
-                    Color.primary.opacity(0.72),
-                    style: StrokeStyle(lineWidth: 2.4, lineCap: .round)
-                )
-                .rotationEffect(.degrees(rotation))
+            if isIndeterminate {
+                Circle()
+                    .trim(from: 0.08, to: 0.74)
+                    .stroke(
+                        Color.primary.opacity(0.72),
+                        style: StrokeStyle(lineWidth: 2.6, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(rotation))
+            } else {
+                Circle()
+                    .trim(from: 0, to: max(0.02, progress))
+                    .stroke(
+                        Color.appAccent,
+                        style: StrokeStyle(lineWidth: 2.6, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeOut(duration: 0.25), value: progress)
+
+                Text("\(Int((progress * 100).rounded()))")
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary.opacity(0.85))
+                    .monospacedDigit()
+            }
         }
         .padding(3)
         .onAppear {

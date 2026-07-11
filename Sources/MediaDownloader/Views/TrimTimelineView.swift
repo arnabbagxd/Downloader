@@ -257,7 +257,7 @@ final class TrimTimelineControl: NSView {
         let right = selectedEndX
         let selectionRect = CGRect(x: left, y: rect.minY, width: max(right - left, handleWidth * 2), height: rect.height)
 
-        NSColor.systemYellow.setStroke()
+        NSColor.appAccent.setStroke()
         let framePath = NSBezierPath(roundedRect: selectionRect, xRadius: cornerRadius, yRadius: cornerRadius)
         framePath.lineWidth = borderWidth
         framePath.stroke()
@@ -273,7 +273,7 @@ final class TrimTimelineControl: NSView {
     }
 
     private func drawHandle(rect: CGRect, roundedLeft: Bool) {
-        NSColor.systemYellow.setFill()
+        NSColor.appAccent.setFill()
         handlePath(rect: rect, roundedLeft: roundedLeft).fill()
 
         NSColor.black.withAlphaComponent(0.72).setFill()

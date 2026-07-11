@@ -1,8 +1,10 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var model: AppModel
+    @State private var isDropTargeted = false
     @State private var inputAppeared = false
     @State private var trimAppeared = false
     @State private var historyAppeared = false
@@ -27,6 +29,7 @@ struct ContentView: View {
                 DownloadInputView(
                     text: $model.inputText,
                     isDownloading: model.isDownloading,
+                    progress: model.downloadProgress,
                     folderName: URL(fileURLWithPath: model.downloadFolderPath).lastPathComponent,
                     onSubmit: model.submitInput,
                     onPaste: model.handlePasteCandidate,
@@ -37,6 +40,18 @@ struct ContentView: View {
                 )
                 .opacity(inputAppeared ? 1 : 0)
                 .blur(radius: inputAppeared ? 0 : 7)
+
+                if model.isProbing {
+                    ProbingCard()
+                        .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                } else if let prompt = model.resolutionPrompt {
+                    ResolutionPickerView(
+                        prompt: prompt,
+                        onSelect: model.chooseResolution,
+                        onCancel: model.cancelResolutionSelection
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                }
 
                 if let session = displayedTrimSession {
                     VideoTrimPanelView(
@@ -53,7 +68,14 @@ struct ContentView: View {
                     .offset(y: trimAppeared ? 0 : -8)
                 }
 
-                if !model.history.isEmpty {
+                if model.history.isEmpty {
+                    if displayedTrimSession == nil {
+                        EmptyHistoryView()
+                            .opacity(historyAppeared ? 1 : 0)
+                            .blur(radius: historyAppeared ? 0 : 5)
+                            .offset(y: historyAppeared ? 0 : -8)
+                    }
+                } else {
                     HistoryListView(
                         items: model.history,
                         onCopy: model.copyFile,
@@ -77,7 +99,14 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .padding(.top, 56)
             .padding(.bottom, 56)
+
+            DropHighlightOverlay(isActive: isDropTargeted)
+                .allowsHitTesting(false)
         }
+        .onDrop(of: [.url, .text, .plainText, .utf8PlainText], isTargeted: $isDropTargeted) { providers in
+            handleDrop(providers)
+        }
+        .animation(.easeOut(duration: 0.16), value: isDropTargeted)
         .onAppear {
             installKeyboardRouter()
             runActivationAnimation()
@@ -109,7 +138,31 @@ struct ContentView: View {
         .onChange(of: displayedTrimSession?.id) { _, _ in
             installKeyboardRouter()
         }
-        .animation(.easeOut(duration: 0.16), value: model.history)
+        .animation(.spring(response: 0.42, dampingFraction: 0.72), value: model.history)
+        .animation(.easeOut(duration: 0.2), value: model.isProbing)
+        .animation(.easeOut(duration: 0.2), value: model.resolutionPrompt)
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+
+        if provider.canLoadObject(ofClass: URL.self) {
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                DispatchQueue.main.async { model.handleDroppedText(url.absoluteString) }
+            }
+            return true
+        }
+
+        if provider.canLoadObject(ofClass: NSString.self) {
+            _ = provider.loadObject(ofClass: NSString.self) { string, _ in
+                guard let string = string as? String else { return }
+                DispatchQueue.main.async { model.handleDroppedText(string) }
+            }
+            return true
+        }
+
+        return false
     }
 
     private var selectedHistoryItem: DownloadItem? {
@@ -379,6 +432,63 @@ struct ContentView: View {
         }
 
         return true
+    }
+}
+
+private struct EmptyHistoryView: View {
+    @State private var floating = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+            LucideIcon(name: "download", size: 44, lineWidth: 1.6)
+                .foregroundStyle(.secondary)
+                .offset(y: floating ? -4 : 4)
+                .animation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true), value: floating)
+
+            VStack(spacing: 6) {
+                Text("No downloads yet")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.primary.opacity(0.85))
+
+                Text("Paste a link above, or drag one onto this window.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 680)
+        .padding(.vertical, 44)
+        .onAppear { floating = true }
+    }
+}
+
+private struct DropHighlightOverlay: View {
+    let isActive: Bool
+
+    var body: some View {
+        ZStack {
+            Color.appAccent.opacity(0.06)
+
+            RoundedRectangle(cornerRadius: 28, style: .continuous)
+                .strokeBorder(
+                    Color.appAccent.opacity(0.7),
+                    style: StrokeStyle(lineWidth: 2, dash: [8, 6])
+                )
+                .padding(18)
+
+            Label {
+                Text("Drop link to download")
+            } icon: {
+                LucideIcon(name: "download", size: 18)
+            }
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 10)
+                .background(Color.appAccent, in: Capsule(style: .continuous))
+                .shadow(color: .black.opacity(0.2), radius: 12, x: 0, y: 6)
+                .scaleEffect(isActive ? 1 : 0.9)
+        }
+        .opacity(isActive ? 1 : 0)
     }
 }
 

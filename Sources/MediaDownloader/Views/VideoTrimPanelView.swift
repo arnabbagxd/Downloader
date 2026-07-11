@@ -95,7 +95,7 @@ struct VideoTrimPanelView: View {
             VStack {
                 HStack {
                     Spacer()
-                    overlayButton(systemName: "xmark", help: "Close trim mode", action: onClose)
+                    overlayButton(iconName: "x", help: "Close trim mode", action: onClose)
                 }
                 Spacer()
             }
@@ -104,12 +104,16 @@ struct VideoTrimPanelView: View {
             VStack {
                 Spacer()
                 HStack {
-                    overlayButton(systemName: isPlaying ? "pause.fill" : "play.fill", help: "Play", action: togglePlayback)
+                    overlayButton(iconName: isPlaying ? "pause" : "play", help: "Play", action: togglePlayback)
                     Spacer()
 
-                    HStack(spacing: 8) {
-                        overlayButton(systemName: copySucceeded ? "checkmark" : "doc.on.doc", help: "Copy trim", action: copyTrim)
-                        overlayButton(systemName: "externaldrive", help: "Save trim", action: saveTrim)
+                    HStack(spacing: 10) {
+                        prominentButton(
+                            iconName: copySucceeded ? "check" : "copy",
+                            title: copySucceeded ? "Copied" : "Copy",
+                            action: copyTrim
+                        )
+                        prominentButton(iconName: "hard-drive", title: "Save", action: saveTrim)
                     }
                 }
             }
@@ -123,10 +127,9 @@ struct VideoTrimPanelView: View {
         }
     }
 
-    private func overlayButton(systemName: String, help: String, action: @escaping () -> Void) -> some View {
+    private func overlayButton(iconName: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 15, weight: .semibold))
+            LucideIcon(name: iconName, size: 17)
                 .foregroundStyle(.white)
                 .frame(width: 34, height: 34)
                 .background(.black.opacity(0.42), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -134,6 +137,26 @@ struct VideoTrimPanelView: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .disabled(isExporting)
+    }
+
+    // Prominent blue action buttons (Copy / Save) with an icon and label.
+    private func prominentButton(iconName: String, title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                LucideIcon(name: iconName, size: 15)
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .frame(height: 36)
+            .background(Color.appAccent, in: Capsule(style: .continuous))
+            .shadow(color: Color.appAccent.opacity(0.45), radius: 10, x: 0, y: 4)
+            .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help(title)
         .disabled(isExporting)
     }
 

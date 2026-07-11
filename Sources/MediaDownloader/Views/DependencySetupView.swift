@@ -13,7 +13,7 @@ struct DependencySetupView: View {
         ZStack {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Welcome to MediaDownloader")
+                    Text("Welcome to Download It")
                         .font(.system(size: 22, weight: .semibold))
                         .foregroundStyle(.primary)
 
@@ -30,7 +30,11 @@ struct DependencySetupView: View {
                                 .font(.system(size: 16, weight: .regular))
 
                             Button(action: onCopyPrompt) {
-                                Label("Copy", systemImage: "doc.on.doc")
+                                Label {
+                                    Text("Copy")
+                                } icon: {
+                                    LucideIcon(name: "copy", size: 14)
+                                }
                                     .font(.system(size: 14, weight: .regular))
                                     .frame(width: actionButtonWidth, height: actionButtonHeight)
                             }

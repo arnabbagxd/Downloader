@@ -6,9 +6,12 @@ final class AppModel: ObservableObject {
     @Published var inputText = ""
     @Published private(set) var history: [DownloadItem] = []
     @Published private(set) var isDownloading = false
+    @Published private(set) var downloadProgress: Double = 0
     @Published var statusMessage: String?
     @Published var activeTrimSession: ActiveTrimSession?
     @Published private(set) var isCheckingForUpdates = false
+    @Published private(set) var isProbing = false
+    @Published var resolutionPrompt: ResolutionPrompt?
 
     private let preferences = PreferencesStore()
     private let historyStore = HistoryStore()
@@ -54,7 +57,7 @@ final class AppModel: ObservableObject {
         pasteTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled else { return }
-            await self?.startDownloadIfNeeded(candidate)
+            await self?.beginResolutionSelection(candidate)
         }
     }
 
@@ -62,8 +65,39 @@ final class AppModel: ObservableObject {
         pasteTask?.cancel()
         Task { [weak self] in
             guard let self else { return }
-            await self.startDownloadIfNeeded(self.inputText)
+            await self.beginResolutionSelection(self.inputText)
         }
+    }
+
+    /// Handles a URL or text string dropped onto the window.
+    func handleDroppedText(_ raw: String) {
+        let candidate = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard URLValidator.looksLikeWebURL(candidate) else {
+            statusMessage = "That doesn't look like a URL."
+            return
+        }
+
+        pasteTask?.cancel()
+        inputText = candidate
+        Task { [weak self] in
+            await self?.beginResolutionSelection(candidate)
+        }
+    }
+
+    /// Called when the user taps one of the resolution boxes.
+    func chooseResolution(_ resolution: VideoResolution) {
+        guard let prompt = resolutionPrompt else { return }
+        let sourceURL = prompt.sourceURL
+        resolutionPrompt = nil
+        Task { [weak self] in
+            await self?.performDownload(sourceURL, formatSelector: resolution.formatSelector)
+        }
+    }
+
+    /// Dismisses the resolution boxes without downloading.
+    func cancelResolutionSelection() {
+        resolutionPrompt = nil
+        pasteTask?.cancel()
     }
 
     func copyFile(_ item: DownloadItem) {
@@ -190,19 +224,51 @@ final class AppModel: ObservableObject {
         ClipboardService.copyFile(trimmedURL)
     }
 
-    private func startDownloadIfNeeded(_ rawURL: String) async {
+    /// Probes the pasted link for its available resolutions and shows the picker boxes.
+    private func beginResolutionSelection(_ rawURL: String) async {
         let sourceURL = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !isDownloading else { return }
+        guard !isDownloading, !isProbing else { return }
         guard URLValidator.looksLikeWebURL(sourceURL) else {
             statusMessage = "Enter a valid URL."
             return
         }
 
+        isProbing = true
+        resolutionPrompt = nil
+        statusMessage = "Finding available resolutions..."
+
+        do {
+            let probe = try await downloader.probe(sourceURL: sourceURL)
+            resolutionPrompt = ResolutionPrompt(
+                sourceURL: sourceURL,
+                title: probe.title,
+                options: VideoResolution.options(from: probe.heights)
+            )
+            statusMessage = nil
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+
+        isProbing = false
+    }
+
+    private func performDownload(_ sourceURL: String, formatSelector: String?) async {
+        guard !isDownloading else { return }
+
         isDownloading = true
+        downloadProgress = 0
         statusMessage = "Downloading..."
 
         do {
-            let result = try await downloader.download(sourceURL: sourceURL, destinationFolder: preferences.downloadFolder)
+            let result = try await downloader.download(
+                sourceURL: sourceURL,
+                destinationFolder: preferences.downloadFolder,
+                formatSelector: formatSelector
+            ) { [weak self] progress in
+                Task { @MainActor in
+                    self?.downloadProgress = progress
+                }
+            }
             let thumbnailPath = try? await thumbnailGenerator.thumbnailPath(for: result.fileURL)
             let item = DownloadItem(
                 sourceURL: sourceURL,
@@ -223,6 +289,7 @@ final class AppModel: ObservableObject {
         }
 
         isDownloading = false
+        downloadProgress = 0
     }
 
     private func presentUpdateResult(
@@ -235,14 +302,14 @@ final class AppModel: ObservableObject {
         case .upToDate:
             guard manual else { return }
             let alert = NSAlert()
-            alert.messageText = "MediaDownloader is up to date"
+            alert.messageText = "Download It is up to date"
             alert.informativeText = "You are running version \(currentVersion)."
             alert.icon = NSImage(named: NSImage.applicationIconName)
             alert.addButton(withTitle: "OK")
             alert.runModal()
         case .updateAvailable(let update):
             let alert = NSAlert()
-            alert.messageText = "MediaDownloader \(update.version) is ready"
+            alert.messageText = "Download It \(update.version) is ready"
             alert.informativeText = downloadedUpdate == nil
                 ? "A new version is available. You are running \(currentVersion)."
                 : "The update has been downloaded in the background. You are running \(currentVersion)."
