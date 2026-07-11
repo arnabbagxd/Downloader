@@ -190,6 +190,17 @@ final class AppModel: ObservableObject {
     }
 
     func editTrim(_ item: DownloadItem) {
+        guard FileManager.default.fileExists(atPath: item.filePath) else {
+            statusMessage = "The downloaded file no longer exists on disk."
+            return
+        }
+
+        // Images can't be trimmed — open them in the default viewer instead.
+        if item.isImageFile {
+            NSWorkspace.shared.open(URL(fileURLWithPath: item.filePath))
+            return
+        }
+
         activeTrimSession = ActiveTrimSession(item: item)
     }
 
@@ -233,12 +244,32 @@ final class AppModel: ObservableObject {
             return
         }
 
+        // Direct image links (…/photo.jpg) skip the probe and download straight away.
+        if let url = URL(string: sourceURL), Self.imageExtensions.contains(url.pathExtension.lowercased()) {
+            await performImageDownload([sourceURL], title: nil, sourceURL: sourceURL)
+            return
+        }
+
         isProbing = true
         resolutionPrompt = nil
-        statusMessage = "Finding available resolutions..."
+        statusMessage = "Checking the link..."
 
         do {
             let probe = try await downloader.probe(sourceURL: sourceURL)
+
+            if probe.isImagePost {
+                // Images have a single size — no resolution boxes, just download.
+                isProbing = false
+                await performImageDownload(probe.imageURLs, title: probe.title, sourceURL: sourceURL)
+                return
+            }
+
+            guard !probe.heights.isEmpty else {
+                statusMessage = "No downloadable video or images were found at that link."
+                isProbing = false
+                return
+            }
+
             resolutionPrompt = ResolutionPrompt(
                 sourceURL: sourceURL,
                 title: probe.title,
@@ -250,6 +281,57 @@ final class AppModel: ObservableObject {
         }
 
         isProbing = false
+    }
+
+    private static let imageExtensions: Set<String> = [
+        "jpg", "jpeg", "png", "webp", "gif", "heic", "bmp", "tiff", "avif"
+    ]
+
+    private func performImageDownload(_ imageURLs: [String], title: String?, sourceURL: String) async {
+        guard !isDownloading else { return }
+
+        isDownloading = true
+        downloadProgress = 0
+        statusMessage = imageURLs.count > 1 ? "Downloading \(imageURLs.count) images..." : "Downloading image..."
+
+        do {
+            let results = try await downloader.downloadImages(
+                imageURLs: imageURLs,
+                title: title,
+                destinationFolder: preferences.downloadFolder
+            ) { [weak self] progress in
+                Task { @MainActor in
+                    self?.downloadProgress = progress
+                }
+            }
+
+            for result in results.reversed() {
+                let item = DownloadItem(
+                    sourceURL: sourceURL,
+                    title: result.title,
+                    filePath: result.fileURL.path,
+                    thumbnailPath: result.fileURL.path, // the image is its own thumbnail
+                    createdAt: Date()
+                )
+                history.insert(item, at: 0)
+            }
+
+            historyStore.save(history)
+
+            if let first = results.first {
+                ClipboardService.copyFile(first.fileURL)
+            }
+
+            inputText = ""
+            statusMessage = results.count > 1
+                ? "Downloaded \(results.count) images and copied the first."
+                : "Downloaded and copied."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+
+        isDownloading = false
+        downloadProgress = 0
     }
 
     private func performDownload(_ sourceURL: String, formatSelector: String?) async {

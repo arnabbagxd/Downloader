@@ -53,10 +53,16 @@ struct VideoResolution: Identifiable, Equatable {
     }
 }
 
-/// The result of probing a link: its title (if any) and available video heights.
+/// The result of probing a link: its title (if any), available video heights,
+/// and — for image posts with no video — the full-resolution image URLs.
 struct VideoProbe: Equatable {
     let title: String?
     let heights: [Int]
+    let imageURLs: [String]
+
+    var isImagePost: Bool {
+        heights.isEmpty && !imageURLs.isEmpty
+    }
 }
 
 /// A pending resolution choice for a pasted link, shown as boxes before downloading.

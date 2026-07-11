@@ -35,11 +35,11 @@ struct HistoryRowView: View {
                 .frame(width: 72, height: 54)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.sourceURL)
+                Text(item.displayName)
                     .font(.system(size: 15, weight: .regular))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
 
                 Text(item.sourceName)
                     .font(.system(size: 13))
@@ -72,6 +72,8 @@ struct HistoryRowView: View {
                 .fill(isKeyboardSelected ? Color.appAccent.opacity(0.14) : Color.clear)
         }
         .contentShape(Rectangle())
+        // Clicking anywhere on the row reopens the video panel (buttons keep their own actions).
+        .onTapGesture(perform: onEdit)
         .scaleEffect(isHovering && !suppressHoverHighlight && dragOffset == 0 ? 1.012 : 1)
         .onHover {
             isHovering = $0
