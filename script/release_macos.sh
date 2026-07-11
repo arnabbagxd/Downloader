@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="MediaDownloader"
-BUNDLE_ID="${BUNDLE_ID:-com.pixelpoint.MediaDownloader}"
+APP_NAME="MediaDownloader"            # internal executable / SwiftPM product name
+DISPLAY_NAME="Download It"            # user-facing app name (bundle + Finder)
+ARTIFACT_NAME="DownloadIt"           # slug for release archive filenames (no spaces)
+BUNDLE_ID="${BUNDLE_ID:-com.arnabbagxd.downloadit}"
 MIN_SYSTEM_VERSION="14.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -80,16 +82,16 @@ VERSION="$(version_from_tag "$TAG")"
 REPO_SLUG="$(resolve_repo_slug)"
 ARCH="$(uname -m)"
 RELEASE_DIR="$ROOT_DIR/dist/release"
-APP_BUNDLE="$RELEASE_DIR/$APP_NAME.app"
+APP_BUNDLE="$RELEASE_DIR/$DISPLAY_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 APP_ICON="$ROOT_DIR/Resources/AppIcon.icns"
-NOTARY_ZIP="$RELEASE_DIR/$APP_NAME-notary.zip"
-RELEASE_ZIP="$RELEASE_DIR/$APP_NAME-macos-$ARCH.zip"
-RELEASE_DMG="$RELEASE_DIR/$APP_NAME-macos-$ARCH.dmg"
+NOTARY_ZIP="$RELEASE_DIR/$ARTIFACT_NAME-notary.zip"
+RELEASE_ZIP="$RELEASE_DIR/$ARTIFACT_NAME-macos-$ARCH.zip"
+RELEASE_DMG="$RELEASE_DIR/$ARTIFACT_NAME-macos-$ARCH.dmg"
 
 if [[ "${ALLOW_DIRTY_RELEASE:-false}" != "true" && -n "$(git status --porcelain)" ]]; then
   fail "working tree is dirty. Commit or stash changes first, or set ALLOW_DIRTY_RELEASE=true"
@@ -115,7 +117,9 @@ cat >"$INFO_PLIST" <<PLIST
   <key>CFBundleIdentifier</key>
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
-  <string>$APP_NAME</string>
+  <string>$DISPLAY_NAME</string>
+  <key>CFBundleDisplayName</key>
+  <string>$DISPLAY_NAME</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleShortVersionString</key>
@@ -147,7 +151,7 @@ spctl -a -vvv --type exec "$APP_BUNDLE"
 
 rm -f "$RELEASE_ZIP"
 /usr/bin/ditto -c -k --keepParent "$APP_BUNDLE" "$RELEASE_ZIP"
-"$ROOT_DIR/script/create_dmg.sh" "$APP_BUNDLE" "$RELEASE_DMG" "$APP_NAME"
+"$ROOT_DIR/script/create_dmg.sh" "$APP_BUNDLE" "$RELEASE_DMG" "$DISPLAY_NAME"
 codesign --force --timestamp --sign "$MEDIA_DOWNLOADER_DEVELOPER_ID" "$RELEASE_DMG"
 codesign --verify --verbose=2 "$RELEASE_DMG"
 xcrun notarytool submit "$RELEASE_DMG" "${NOTARY_ARGS[@]}" --wait
