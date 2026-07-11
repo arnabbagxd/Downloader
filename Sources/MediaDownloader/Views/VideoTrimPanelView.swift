@@ -35,7 +35,7 @@ struct VideoTrimPanelView: View {
             }
 
             LinearGradient(
-                colors: [.clear, .black.opacity(0.42)],
+                colors: [.clear, .black.opacity(0.55)],
                 startPoint: .center,
                 endPoint: .bottom
             )
@@ -49,14 +49,6 @@ struct VideoTrimPanelView: View {
                 .animation(.easeOut(duration: 0.14), value: isExporting)
 
             VStack(spacing: 8) {
-                if let feedback {
-                    Text(feedback)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.72))
-                        .lineLimit(1)
-                        .frame(width: 648, alignment: .leading)
-                }
-
                 timeReadout
 
                 TrimTimelineView(
@@ -93,6 +85,8 @@ struct VideoTrimPanelView: View {
     }
 
     // Live time readout: trim start, playhead / total duration, and trim end.
+    // Transient feedback (e.g. "Saved to Downloads") swaps into the center slot
+    // instead of adding a new line, so the layout never reflows or overlaps.
     private var timeReadout: some View {
         HStack {
             Text(Self.formatTime(selection.start, precise: true))
@@ -100,13 +94,22 @@ struct VideoTrimPanelView: View {
 
             Spacer()
 
-            HStack(spacing: 6) {
-                Text("\(Self.formatTime(playheadTime)) / \(Self.formatTime(duration))")
-                    .foregroundStyle(.white.opacity(0.72))
+            if let feedback {
+                Text(feedback)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 420)
+                    .transition(.opacity)
+            } else {
+                HStack(spacing: 6) {
+                    Text("\(Self.formatTime(playheadTime)) / \(Self.formatTime(duration))")
+                        .foregroundStyle(.white.opacity(0.72))
 
-                if hasPartialSelection {
-                    Text("· \(Self.formatDurationSeconds(selection.end - selection.start)) selected")
-                        .foregroundStyle(Color.appAccentBright)
+                    if hasPartialSelection {
+                        Text("· \(Self.formatDurationSeconds(selection.end - selection.start)) selected")
+                            .foregroundStyle(Color.appAccentBright)
+                    }
                 }
             }
 
@@ -117,6 +120,7 @@ struct VideoTrimPanelView: View {
         }
         .font(.system(size: 11, weight: .medium, design: .monospaced))
         .frame(width: 640)
+        .animation(.easeOut(duration: 0.15), value: feedback)
     }
 
     private var hasPartialSelection: Bool {
@@ -176,7 +180,7 @@ struct VideoTrimPanelView: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 88)
+            .padding(.bottom, 110)
 
             if isExporting {
                 TrimExportIndicator()
