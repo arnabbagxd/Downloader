@@ -27,16 +27,14 @@ double-click, no warnings.
 > **Older macOS (Monterey / Ventura)?** You can instead **right-click (or Control-click)
 > the app → Open → Open** in the dialog. On the newest macOS, use the System Settings steps above.
 
-## Also install the two helpers
+## First launch sets itself up
 
-Download It uses two free, widely-used tools to do the actual downloading and video trimming.
-Install them once with [Homebrew](https://brew.sh):
+The very first time you open Download It, it downloads the two small tools it needs
+(about 60 MB, one time) and shows a brief "Setting up…" screen. You don't need to install
+anything — just make sure you're connected to the internet on that first launch.
 
-```sh
-brew install yt-dlp ffmpeg
-```
-
-The app will also prompt you and show this command if the tools are missing.
+_Advanced/troubleshooting: if you already use [Homebrew](https://brew.sh), you can instead
+`brew install yt-dlp ffmpeg` and the app will use those._
 
 ## Is this safe?
 

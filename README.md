@@ -6,6 +6,7 @@ Download It lets you download, quickly copy, reveal, and trim videos from social
 
 ## Features
 
+- **No setup required** — on first launch the app downloads the tools it needs (`yt-dlp` + `ffmpeg`) automatically. No Homebrew, no Terminal.
 - Download videos from thousands of `yt-dlp`-supported websites.
 - Paste (or drag-and-drop) a URL into a clean, Spotlight-style window.
 - **Pick the resolution per video** — the app probes the link and shows the actual available qualities (up to 4K/8K), as selectable boxes.
@@ -18,27 +19,25 @@ Download It lets you download, quickly copy, reveal, and trim videos from social
 - Choose and persist a custom download folder.
 - Check GitHub Releases for app updates from the settings menu.
 
+## Runtime dependencies
+
+Download It uses [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) and [`ffmpeg`](https://ffmpeg.org/)
+under the hood. **End users don't need to install anything** — the app downloads these tools
+itself on first launch (into `~/Library/Application Support/MediaDownloader/bin`) and keeps
+`yt-dlp` updated. See [NOTICE.md](NOTICE.md) for attribution and licenses.
+
+If you already have them on your `PATH` (e.g. via `brew install yt-dlp ffmpeg`), the app will
+use those instead.
+
 ## Local Development Requirements
 
-These are only needed to build or run the app from source:
+To build from source:
 
 - macOS 14 or newer
 - Xcode Command Line Tools or Xcode with Swift 5.9+
-- [`yt-dlp`](https://github.com/yt-dlp/yt-dlp)
-- [`ffmpeg`](https://ffmpeg.org/)
-
-Install the toolchain and runtime dependencies:
 
 ```sh
 xcode-select --install
-brew install yt-dlp ffmpeg
-```
-
-Verify the tools are available:
-
-```sh
-yt-dlp --version
-ffmpeg -version
 ```
 
 ## Build and Run (Local Development)

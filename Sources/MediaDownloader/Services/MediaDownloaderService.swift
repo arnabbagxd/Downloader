@@ -26,19 +26,19 @@ actor MediaDownloaderService {
         formatSelector: String? = nil,
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> DownloadResult {
-        try await requireTool("yt-dlp")
-        try await requireTool("ffmpeg")
+        guard let ytDlp = ToolManager.ytDlpPath else { throw MediaDownloaderError.missingTool("yt-dlp") }
+        guard let ffmpeg = ToolManager.ffmpegPath else { throw MediaDownloaderError.missingTool("ffmpeg") }
         try fileManager.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
 
         let startDate = Date()
         var arguments = [
-            "yt-dlp",
             "--no-playlist",
             "--newline",
             "--restrict-filenames",
             "--merge-output-format", "mp4",
             "--recode-video", "mp4",
-            "-S", "vcodec:h264,acodec:aac,ext:mp4:m4a"
+            "-S", "vcodec:h264,acodec:aac,ext:mp4:m4a",
+            "--ffmpeg-location", ffmpeg
         ]
 
         // Cap the resolution when the user picked a specific quality.
@@ -57,7 +57,7 @@ actor MediaDownloaderService {
         // Track the highest percentage seen so the ring only ever moves forward,
         // even though yt-dlp reports separate 0-100% passes for video and audio.
         let highestProgress = ProgressTracker()
-        let output = try await runProcess(executable: "/usr/bin/env", arguments: arguments) { line in
+        let output = try await runProcess(executable: ytDlp, arguments: arguments) { line in
             guard let onProgress, let fraction = Self.parseProgress(from: line) else { return }
             if let advanced = highestProgress.advance(to: fraction) {
                 onProgress(advanced)
@@ -77,12 +77,12 @@ actor MediaDownloaderService {
     /// Fetches a link's title, the distinct video heights it offers (highest first), and —
     /// for image-only posts — the full-resolution image URLs. Never downloads media.
     func probe(sourceURL: String) async throws -> VideoProbe {
-        try await requireTool("yt-dlp")
+        guard let ytDlp = ToolManager.ytDlpPath else { throw MediaDownloaderError.missingTool("yt-dlp") }
 
         // --ignore-no-formats-error keeps image-only posts (e.g. Instagram photos) from
         // failing outright; their metadata still contains full-resolution "thumbnails".
-        let output = try await runProcess(executable: "/usr/bin/env", arguments: [
-            "yt-dlp", "--no-playlist", "--no-warnings", "--ignore-no-formats-error", "-J", sourceURL
+        let output = try await runProcess(executable: ytDlp, arguments: [
+            "--no-playlist", "--no-warnings", "--ignore-no-formats-error", "-J", sourceURL
         ])
 
         guard let data = output.data(using: .utf8),
@@ -213,10 +213,6 @@ actor MediaDownloaderService {
         if let int = value as? Int { return int }
         if let double = value as? Double { return Int(double) }
         return nil
-    }
-
-    private func requireTool(_ tool: String) async throws {
-        _ = try await runProcess(executable: "/usr/bin/env", arguments: ["which", tool])
     }
 
     private func newestMediaFile(in folder: URL, after date: Date) throws -> URL {

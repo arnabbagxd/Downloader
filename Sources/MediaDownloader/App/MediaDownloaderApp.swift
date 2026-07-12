@@ -21,9 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let preferences = PreferencesStore()
     private var window: SpotlightWindow?
     private var setupWindow: SpotlightWindow?
-    private var dependencyStatus = DependencyChecker.check()
-    private let forceSetupWindow = ProcessInfo.processInfo.arguments.contains("--show-dependency-setup")
-    private var didPassForcedSetup = false
+    private var setupModel: ToolSetupModel?
     private lazy var activationHotKey = GlobalHotKeyManager { [weak self] in
         self?.presentReadyWindow(activate: true)
     }
@@ -64,9 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func presentReadyWindow(activate: Bool) {
-        dependencyStatus = DependencyChecker.check()
-
-        if dependencyStatus.isSatisfied && (!forceSetupWindow || didPassForcedSetup) {
+        if ToolManager.isReady {
             setupWindow?.orderOut(nil)
             presentWindow(activate: activate)
         } else {
@@ -85,17 +81,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         model.checkForUpdates(manual: false)
+        Task { await self.maybeUpdateYtDlp() }
     }
 
     private func presentSetupWindow(activate: Bool) {
         let window = makeSetupWindowIfNeeded()
-        window.contentView = makeSetupContentView()
+        // Build the setup content once so re-showing the window can't restart the download.
+        if setupModel == nil {
+            window.contentView = makeSetupContentView()
+        }
         centerWindowOnCurrentDisplay(window)
         window.makeKeyAndOrderFront(nil)
 
         if activate {
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    /// Keeps the managed yt-dlp current, at most once per day, in the background.
+    private func maybeUpdateYtDlp() async {
+        let key = "lastYtDlpUpdateCheck"
+        let now = Date()
+        if let last = UserDefaults.standard.object(forKey: key) as? Date,
+           now.timeIntervalSince(last) < 86_400 {
+            return
+        }
+        UserDefaults.standard.set(now, forKey: key)
+        await ToolManager.updateYtDlpIfManaged()
     }
 
     private func makeWindowIfNeeded() -> SpotlightWindow {
@@ -157,32 +169,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func makeSetupContentView() -> NSView {
-        NSHostingView(
-            rootView: DependencySetupView(
-                status: dependencyStatus,
-                onCopyPrompt: copyInstallPrompt,
-                onCheckAgain: checkDependenciesAgain
-            )
-            .frame(width: 520, height: 360)
-            .tint(.appAccent)
+        let model = ToolSetupModel(onReady: { [weak self] in
+            self?.presentReadyWindow(activate: true)
+        })
+        setupModel = model
+
+        return NSHostingView(
+            rootView: ToolSetupView(model: model)
+                .frame(width: 520, height: 360)
+                .tint(.appAccent)
         )
-    }
-
-    private func copyInstallPrompt() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(DependencyChecker.installPrompt, forType: .string)
-    }
-
-    private func checkDependenciesAgain() {
-        dependencyStatus = DependencyChecker.check()
-
-        if dependencyStatus.isSatisfied {
-            didPassForcedSetup = true
-            setupWindow?.orderOut(nil)
-            presentWindow(activate: true)
-        } else {
-            presentSetupWindow(activate: true)
-        }
     }
 
     private func centerWindowOnCurrentDisplay(_ window: NSWindow) {
