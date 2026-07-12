@@ -51,6 +51,13 @@ struct ContentView: View {
                         onCancel: model.cancelResolutionSelection
                     )
                     .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                } else if let prompt = model.conversionPrompt {
+                    ImageFormatPickerView(
+                        prompt: prompt,
+                        onSelect: model.chooseConversionFormat,
+                        onCancel: model.cancelConversion
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
                 }
 
                 if let session = displayedTrimSession {
@@ -103,7 +110,7 @@ struct ContentView: View {
             DropHighlightOverlay(isActive: isDropTargeted)
                 .allowsHitTesting(false)
         }
-        .onDrop(of: [.url, .text, .plainText, .utf8PlainText], isTargeted: $isDropTargeted) { providers in
+        .onDrop(of: [.image, .fileURL, .url, .text, .plainText, .utf8PlainText], isTargeted: $isDropTargeted) { providers in
             handleDrop(providers)
         }
         .animation(.easeOut(duration: 0.16), value: isDropTargeted)
@@ -141,28 +148,60 @@ struct ContentView: View {
         .animation(.spring(response: 0.42, dampingFraction: 0.72), value: model.history)
         .animation(.easeOut(duration: 0.2), value: model.isProbing)
         .animation(.easeOut(duration: 0.2), value: model.resolutionPrompt)
+        .animation(.easeOut(duration: 0.2), value: model.conversionPrompt)
     }
 
+    private static let imageFileExtensions: Set<String> = [
+        "jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "bmp", "tiff", "tif", "avif"
+    ]
+
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { return false }
+        let urlProviders = providers.filter { $0.canLoadObject(ofClass: URL.self) }
 
-        if provider.canLoadObject(ofClass: URL.self) {
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                guard let url else { return }
-                DispatchQueue.main.async { model.handleDroppedText(url.absoluteString) }
+        // No URL objects — fall back to a dragged text link.
+        guard !urlProviders.isEmpty else {
+            guard let textProvider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else {
+                return false
             }
-            return true
-        }
-
-        if provider.canLoadObject(ofClass: NSString.self) {
-            _ = provider.loadObject(ofClass: NSString.self) { string, _ in
+            _ = textProvider.loadObject(ofClass: NSString.self) { string, _ in
                 guard let string = string as? String else { return }
                 DispatchQueue.main.async { model.handleDroppedText(string) }
             }
             return true
         }
 
-        return false
+        // Gather every dropped URL, then decide: local image files → convert, web link → download.
+        var imageFiles: [URL] = []
+        var webURL: String?
+        let group = DispatchGroup()
+
+        for provider in urlProviders {
+            group.enter()
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                DispatchQueue.main.async {
+                    if let url {
+                        if url.isFileURL {
+                            if Self.imageFileExtensions.contains(url.pathExtension.lowercased()) {
+                                imageFiles.append(url)
+                            }
+                        } else {
+                            webURL = url.absoluteString
+                        }
+                    }
+                    group.leave()
+                }
+            }
+        }
+
+        group.notify(queue: .main) {
+            if !imageFiles.isEmpty {
+                model.handleDroppedImageFiles(imageFiles)
+            } else if let webURL {
+                model.handleDroppedText(webURL)
+            }
+        }
+
+        return true
     }
 
     private var selectedHistoryItem: DownloadItem? {
@@ -476,7 +515,7 @@ private struct DropHighlightOverlay: View {
                 .padding(18)
 
             Label {
-                Text("Drop link to download")
+                Text("Drop a link to download, or images to convert")
             } icon: {
                 LucideIcon(name: "download", size: 18)
             }
