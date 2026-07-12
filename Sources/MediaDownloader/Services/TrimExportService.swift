@@ -28,15 +28,18 @@ actor TrimExportService {
             withIntermediateDirectories: true
         )
 
+        guard let ffmpeg = ToolManager.ffmpegPath else {
+            throw TrimExportError.processFailed("ffmpeg is not available yet.")
+        }
+
         let arguments = Self.exportArguments(sourceURL: sourceURL, selection: selection, outputURL: outputURL)
 
-        try await runProcess(executable: "/usr/bin/env", arguments: arguments)
+        try await runProcess(executable: ffmpeg, arguments: arguments)
         return outputURL
     }
 
     nonisolated static func exportArguments(sourceURL: URL, selection: TrimSelection, outputURL: URL) -> [String] {
         [
-            "ffmpeg",
             "-y",
             "-i", sourceURL.path,
             "-ss", formatTime(selection.start),

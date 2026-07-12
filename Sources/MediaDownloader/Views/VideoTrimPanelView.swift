@@ -35,7 +35,7 @@ struct VideoTrimPanelView: View {
             }
 
             LinearGradient(
-                colors: [.clear, .black.opacity(0.42)],
+                colors: [.clear, .black.opacity(0.55)],
                 startPoint: .center,
                 endPoint: .bottom
             )
@@ -49,13 +49,7 @@ struct VideoTrimPanelView: View {
                 .animation(.easeOut(duration: 0.14), value: isExporting)
 
             VStack(spacing: 8) {
-                if let feedback {
-                    Text(feedback)
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.72))
-                        .lineLimit(1)
-                        .frame(width: 648, alignment: .leading)
-                }
+                timeReadout
 
                 TrimTimelineView(
                     selection: $selection,
@@ -90,6 +84,74 @@ struct VideoTrimPanelView: View {
         }
     }
 
+    // Live time readout: trim start, playhead / total duration, and trim end.
+    // Transient feedback (e.g. "Saved to Downloads") swaps into the center slot
+    // instead of adding a new line, so the layout never reflows or overlaps.
+    private var timeReadout: some View {
+        HStack {
+            Text(Self.formatTime(selection.start, precise: true))
+                .foregroundStyle(hasPartialSelection ? Color.appAccentBright : .white.opacity(0.55))
+
+            Spacer()
+
+            if let feedback {
+                Text(feedback)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 420)
+                    .transition(.opacity)
+            } else {
+                HStack(spacing: 6) {
+                    Text("\(Self.formatTime(playheadTime)) / \(Self.formatTime(duration))")
+                        .foregroundStyle(.white.opacity(0.72))
+
+                    if hasPartialSelection {
+                        Text("· \(Self.formatDurationSeconds(selection.end - selection.start)) selected")
+                            .foregroundStyle(Color.appAccentBright)
+                    }
+                }
+            }
+
+            Spacer()
+
+            Text(Self.formatTime(selection.end, precise: true))
+                .foregroundStyle(hasPartialSelection ? Color.appAccentBright : .white.opacity(0.55))
+        }
+        .font(.system(size: 11, weight: .medium, design: .monospaced))
+        .frame(width: 640)
+        .animation(.easeOut(duration: 0.15), value: feedback)
+    }
+
+    private var hasPartialSelection: Bool {
+        guard duration > 0 else { return false }
+        return selection.start > 0.05 || selection.end < duration - 0.05
+    }
+
+    /// "1:23" or, with `precise`, "1:23.4" for exact trim points.
+    static func formatTime(_ seconds: Double, precise: Bool = false) -> String {
+        let clamped = max(0, seconds)
+        let totalSeconds = Int(clamped)
+        let minutes = totalSeconds / 60
+        let secs = totalSeconds % 60
+
+        if precise {
+            let tenths = Int((clamped - Double(totalSeconds)) * 10)
+            return String(format: "%d:%02d.%d", minutes, secs, tenths)
+        }
+
+        return String(format: "%d:%02d", minutes, secs)
+    }
+
+    /// "8.4s" or "1m 12s" for a selected span.
+    static func formatDurationSeconds(_ seconds: Double) -> String {
+        let clamped = max(0, seconds)
+        if clamped < 60 {
+            return String(format: "%.1fs", clamped)
+        }
+        return "\(Int(clamped) / 60)m \(Int(clamped) % 60)s"
+    }
+
     private var videoControls: some View {
         ZStack {
             VStack {
@@ -118,7 +180,7 @@ struct VideoTrimPanelView: View {
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 88)
+            .padding(.bottom, 110)
 
             if isExporting {
                 TrimExportIndicator()

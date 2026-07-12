@@ -36,6 +36,12 @@ struct DownloadItem: Identifiable, Codable, Hashable {
         URL(fileURLWithPath: filePath).lastPathComponent
     }
 
+    /// True when the downloaded file is a still image rather than a video.
+    var isImageFile: Bool {
+        let ext = URL(fileURLWithPath: filePath).pathExtension.lowercased()
+        return ["jpg", "jpeg", "png", "webp", "gif", "heic", "bmp", "tiff", "avif"].contains(ext)
+    }
+
     var sourceName: String {
         guard let host = URLComponents(string: sourceURL)?.host else {
             return "Web"

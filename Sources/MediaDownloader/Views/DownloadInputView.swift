@@ -21,7 +21,7 @@ struct DownloadInputView: View {
 
             PasteAwareTextField(
                 text: $text,
-                placeholder: "Paste Instagram, X, or YouTube URL",
+                placeholder: "Paste a video or image link — Instagram, X, YouTube…",
                 onSubmit: onSubmit,
                 onPaste: onPaste,
                 onTab: onFocusHistory
