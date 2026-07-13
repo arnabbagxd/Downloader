@@ -19,6 +19,10 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             Color.clear
+            FileDropView(
+                onDropURLs: handleDroppedURLs,
+                onTargeted: { isDropTargeted = $0 }
+            )
             MouseMovementMonitor(
                 isActive: suppressHistoryHover,
                 onMouseMoved: restoreHistoryHover
@@ -49,6 +53,13 @@ struct ContentView: View {
                         prompt: prompt,
                         onSelect: model.chooseResolution,
                         onCancel: model.cancelResolutionSelection
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                } else if let prompt = model.conversionPrompt {
+                    ImageFormatPickerView(
+                        prompt: prompt,
+                        onSelect: model.chooseConversionFormat,
+                        onCancel: model.cancelConversion
                     )
                     .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
                 }
@@ -103,9 +114,6 @@ struct ContentView: View {
             DropHighlightOverlay(isActive: isDropTargeted)
                 .allowsHitTesting(false)
         }
-        .onDrop(of: [.url, .text, .plainText, .utf8PlainText], isTargeted: $isDropTargeted) { providers in
-            handleDrop(providers)
-        }
         .animation(.easeOut(duration: 0.16), value: isDropTargeted)
         .onAppear {
             installKeyboardRouter()
@@ -141,28 +149,23 @@ struct ContentView: View {
         .animation(.spring(response: 0.42, dampingFraction: 0.72), value: model.history)
         .animation(.easeOut(duration: 0.2), value: model.isProbing)
         .animation(.easeOut(duration: 0.2), value: model.resolutionPrompt)
+        .animation(.easeOut(duration: 0.2), value: model.conversionPrompt)
     }
 
-    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { return false }
+    private static let imageFileExtensions: Set<String> = [
+        "jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "bmp", "tiff", "tif", "avif"
+    ]
 
-        if provider.canLoadObject(ofClass: URL.self) {
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                guard let url else { return }
-                DispatchQueue.main.async { model.handleDroppedText(url.absoluteString) }
-            }
-            return true
+    private func handleDroppedURLs(_ urls: [URL]) {
+        let imageFiles = urls.filter {
+            $0.isFileURL && Self.imageFileExtensions.contains($0.pathExtension.lowercased())
         }
 
-        if provider.canLoadObject(ofClass: NSString.self) {
-            _ = provider.loadObject(ofClass: NSString.self) { string, _ in
-                guard let string = string as? String else { return }
-                DispatchQueue.main.async { model.handleDroppedText(string) }
-            }
-            return true
+        if !imageFiles.isEmpty {
+            model.handleDroppedImageFiles(imageFiles)
+        } else if let webURL = urls.first(where: { !$0.isFileURL }) {
+            model.handleDroppedText(webURL.absoluteString)
         }
-
-        return false
     }
 
     private var selectedHistoryItem: DownloadItem? {
@@ -476,7 +479,7 @@ private struct DropHighlightOverlay: View {
                 .padding(18)
 
             Label {
-                Text("Drop link to download")
+                Text("Drop a link to download, or images to convert")
             } icon: {
                 LucideIcon(name: "download", size: 18)
             }
@@ -489,6 +492,80 @@ private struct DropHighlightOverlay: View {
                 .scaleEffect(isActive ? 1 : 0.9)
         }
         .opacity(isActive ? 1 : 0)
+    }
+}
+
+/// AppKit-backed drop target. SwiftUI's `onDrop` doesn't reliably deliver the drop in a
+/// borderless window, so we read the dragging pasteboard directly, which is rock-solid.
+private struct FileDropView: NSViewRepresentable {
+    let onDropURLs: ([URL]) -> Void
+    let onTargeted: (Bool) -> Void
+
+    func makeNSView(context: Context) -> DropReceivingView {
+        let view = DropReceivingView()
+        view.onDropURLs = onDropURLs
+        view.onTargeted = onTargeted
+        return view
+    }
+
+    func updateNSView(_ nsView: DropReceivingView, context: Context) {
+        nsView.onDropURLs = onDropURLs
+        nsView.onTargeted = onTargeted
+    }
+
+    final class DropReceivingView: NSView {
+        var onDropURLs: ([URL]) -> Void = { _ in }
+        var onTargeted: (Bool) -> Void = { _ in }
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            registerForDraggedTypes([.fileURL, .URL, .string])
+        }
+
+        required init?(coder: NSCoder) {
+            super.init(coder: coder)
+            registerForDraggedTypes([.fileURL, .URL, .string])
+        }
+
+        // Bottom layer of the ZStack: interactive SwiftUI controls sit on top and receive
+        // clicks first; this view catches drags over the rest of the window.
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            onTargeted(true)
+            return .copy
+        }
+
+        override func draggingExited(_ sender: NSDraggingInfo?) {
+            onTargeted(false)
+        }
+
+        override func draggingEnded(_ sender: NSDraggingInfo) {
+            onTargeted(false)
+        }
+
+        override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { true }
+
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            onTargeted(false)
+            let pasteboard = sender.draggingPasteboard
+
+            var urls: [URL] = []
+            if let objects = pasteboard.readObjects(
+                forClasses: [NSURL.self],
+                options: [.urlReadingFileURLsOnly: false]
+            ) as? [URL] {
+                urls = objects
+            }
+
+            // Fall back to a plain-text URL (some apps drag links as strings).
+            if urls.isEmpty, let string = pasteboard.string(forType: .string),
+               let url = URL(string: string.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                urls = [url]
+            }
+
+            guard !urls.isEmpty else { return false }
+            onDropURLs(urls)
+            return true
+        }
     }
 }
 
