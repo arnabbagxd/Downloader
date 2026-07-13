@@ -9,7 +9,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         self.preferences = preferences
         self.onCheckForUpdates = onCheckForUpdates
 
-        let contentSize = NSSize(width: 560, height: 430)
+        let contentSize = NSSize(width: 540, height: 430)
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: contentSize),
             styleMask: [.titled, .closable, .fullSizeContentView],
@@ -20,7 +20,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
-        window.backgroundColor = SettingsColors.windowBackground
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.appearance = NSAppearance(named: .darkAqua)
         window.minSize = contentSize
         window.maxSize = contentSize
         window.collectionBehavior = [.moveToActiveSpace]
@@ -58,25 +60,30 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 }
 
 private enum SettingsColors {
-    static let windowBackground = NSColor(calibratedWhite: 0.145, alpha: 1)
-    static let cardBackground = NSColor(calibratedWhite: 0.155, alpha: 1)
-    static let cardBorder = NSColor(calibratedWhite: 1, alpha: 0.105)
-    static let separator = NSColor(calibratedWhite: 1, alpha: 0.095)
-    static let shortcutFill = NSColor(calibratedWhite: 1, alpha: 0.22)
-    static let shortcutBorder = NSColor(calibratedWhite: 1, alpha: 0.16)
+    static let cardFill = NSColor.white.withAlphaComponent(0.05)
+    static let cardBorder = NSColor.white.withAlphaComponent(0.09)
+    static let separator = NSColor.white.withAlphaComponent(0.07)
+    static let controlFill = NSColor.white.withAlphaComponent(0.08)
+    static let controlFillHover = NSColor.white.withAlphaComponent(0.14)
+    static let controlBorder = NSColor.white.withAlphaComponent(0.11)
 }
 
 private final class SettingsRootView: NSView {
     private enum Metrics {
-        static let contentWidth: CGFloat = 500
-        static let leading: CGFloat = 30
-        static let top: CGFloat = 52
+        static let leading: CGFloat = 28
+        static let top: CGFloat = 46
     }
 
     init(frame: NSRect, preferences: PreferencesStore, onCheckForUpdates: @escaping () -> Void) {
         super.init(frame: frame)
-        wantsLayer = true
-        layer?.backgroundColor = SettingsColors.windowBackground.cgColor
+
+        // Frosted background to match the rest of the app.
+        let background = NSVisualEffectView()
+        background.material = .hudWindow
+        background.blendingMode = .behindWindow
+        background.state = .active
+        background.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(background)
 
         let generalTitle = sectionTitle("General")
         let generalCard = GeneralSettingsCard(onCheckForUpdates: onCheckForUpdates)
@@ -89,21 +96,26 @@ private final class SettingsRootView: NSView {
         }
 
         NSLayoutConstraint.activate([
-            generalTitle.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.leading),
+            background.leadingAnchor.constraint(equalTo: leadingAnchor),
+            background.trailingAnchor.constraint(equalTo: trailingAnchor),
+            background.topAnchor.constraint(equalTo: topAnchor),
+            background.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            generalTitle.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.leading + 2),
             generalTitle.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.top),
 
             generalCard.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.leading),
             generalCard.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.leading),
-            generalCard.topAnchor.constraint(equalTo: generalTitle.bottomAnchor, constant: 22),
-            generalCard.heightAnchor.constraint(equalToConstant: 96),
+            generalCard.topAnchor.constraint(equalTo: generalTitle.bottomAnchor, constant: 12),
+            generalCard.heightAnchor.constraint(equalToConstant: 92),
 
-            shortcutsTitle.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.leading),
-            shortcutsTitle.topAnchor.constraint(equalTo: generalCard.bottomAnchor, constant: 30),
+            shortcutsTitle.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.leading + 2),
+            shortcutsTitle.topAnchor.constraint(equalTo: generalCard.bottomAnchor, constant: 28),
 
             shortcutsCard.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.leading),
             shortcutsCard.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.leading),
-            shortcutsCard.topAnchor.constraint(equalTo: shortcutsTitle.bottomAnchor, constant: 20),
-            shortcutsCard.heightAnchor.constraint(equalToConstant: 114)
+            shortcutsCard.topAnchor.constraint(equalTo: shortcutsTitle.bottomAnchor, constant: 12),
+            shortcutsCard.heightAnchor.constraint(equalToConstant: 150)
         ])
     }
 
@@ -112,9 +124,18 @@ private final class SettingsRootView: NSView {
     }
 
     private func sectionTitle(_ title: String) -> NSTextField {
-        let label = NSTextField(labelWithString: title)
-        label.font = .systemFont(ofSize: 19, weight: .regular)
-        label.textColor = .labelColor
+        let label = NSTextField(labelWithString: title.uppercased())
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = .tertiaryLabelColor
+        // A touch of tracking makes the small-caps header feel intentional.
+        label.attributedStringValue = NSAttributedString(
+            string: title.uppercased(),
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+                .foregroundColor: NSColor.tertiaryLabelColor,
+                .kern: 0.6
+            ]
+        )
         return label
     }
 }
@@ -133,16 +154,16 @@ private final class GeneralSettingsCard: NSView {
         icon.translatesAutoresizingMaskIntoConstraints = false
 
         let title = NSTextField(labelWithString: "Download It")
-        title.font = .systemFont(ofSize: 17, weight: .regular)
+        title.font = .systemFont(ofSize: 16, weight: .semibold)
         title.textColor = .labelColor
         title.translatesAutoresizingMaskIntoConstraints = false
 
-        let subtitle = NSTextField(labelWithString: Self.versionText)
-        subtitle.font = .systemFont(ofSize: 13, weight: .regular)
+        let subtitle = NSTextField(labelWithString: "Version \(Self.versionText)")
+        subtitle.font = .systemFont(ofSize: 12, weight: .regular)
         subtitle.textColor = .secondaryLabelColor
         subtitle.translatesAutoresizingMaskIntoConstraints = false
 
-        let updateButton = SettingsButton(title: "Check for Updates")
+        let updateButton = SettingsButton(title: "Check for Updates", accent: true)
         updateButton.target = self
         updateButton.action = #selector(checkForUpdates)
         updateButton.translatesAutoresizingMaskIntoConstraints = false
@@ -150,21 +171,20 @@ private final class GeneralSettingsCard: NSView {
         [icon, title, subtitle, updateButton].forEach(addSubview)
 
         NSLayoutConstraint.activate([
-            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 22),
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
             icon.centerYAnchor.constraint(equalTo: centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 52),
-            icon.heightAnchor.constraint(equalToConstant: 52),
+            icon.widthAnchor.constraint(equalToConstant: 54),
+            icon.heightAnchor.constraint(equalToConstant: 54),
 
-            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 16),
-            title.topAnchor.constraint(equalTo: icon.topAnchor, constant: 4),
+            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 15),
+            title.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -10),
 
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 4),
+            subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 3),
 
-            updateButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            updateButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
             updateButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            updateButton.widthAnchor.constraint(equalToConstant: 210),
-            updateButton.heightAnchor.constraint(equalToConstant: 28)
+            updateButton.heightAnchor.constraint(equalToConstant: 30)
         ])
     }
 
@@ -181,12 +201,12 @@ private final class GeneralSettingsCard: NSView {
         let normalizedVersion = version?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard let normalizedVersion, !normalizedVersion.isEmpty else {
-            return "v0.2.0"
+            return "1.0.0"
         }
 
         return normalizedVersion.lowercased().hasPrefix("v")
-            ? normalizedVersion
-            : "v\(normalizedVersion)"
+            ? String(normalizedVersion.dropFirst())
+            : normalizedVersion
     }
 }
 
@@ -202,7 +222,7 @@ private final class ShortcutSettingsCard: NSView {
         addSubview(stack)
 
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor)
@@ -246,14 +266,14 @@ private final class ShortcutSettingsRow: NSView {
         addSubview(recorder)
 
         var constraints: [NSLayoutConstraint] = [
-            heightAnchor.constraint(equalToConstant: 38),
-            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 1),
+            heightAnchor.constraint(equalToConstant: 50),
+            title.leadingAnchor.constraint(equalTo: leadingAnchor),
             title.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            recorder.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            recorder.trailingAnchor.constraint(equalTo: trailingAnchor),
             recorder.centerYAnchor.constraint(equalTo: centerYAnchor),
-            recorder.widthAnchor.constraint(equalToConstant: 120),
-            recorder.heightAnchor.constraint(equalToConstant: 24)
+            recorder.widthAnchor.constraint(equalToConstant: 132),
+            recorder.heightAnchor.constraint(equalToConstant: 28)
         ]
 
         if showsSeparator {
@@ -263,8 +283,8 @@ private final class ShortcutSettingsRow: NSView {
             separator.translatesAutoresizingMaskIntoConstraints = false
             addSubview(separator)
             constraints.append(contentsOf: [
-                separator.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 1),
-                separator.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+                separator.leadingAnchor.constraint(equalTo: leadingAnchor),
+                separator.trailingAnchor.constraint(equalTo: trailingAnchor),
                 separator.bottomAnchor.constraint(equalTo: bottomAnchor),
                 separator.heightAnchor.constraint(equalToConstant: 1)
             ])
@@ -278,33 +298,90 @@ private final class ShortcutSettingsRow: NSView {
     }
 }
 
-private final class SettingsButton: NSButton {
-    init(title: String) {
+/// A button that tracks hover so subclasses can react.
+private class HoverButton: NSButton {
+    private(set) var isHovered = false
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+        hoverChanged()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+        hoverChanged()
+    }
+
+    func hoverChanged() {}
+}
+
+private final class SettingsButton: HoverButton {
+    private let accent: Bool
+
+    init(title: String, accent: Bool = false) {
+        self.accent = accent
         super.init(frame: .zero)
         isBordered = false
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = 8
         layer?.masksToBounds = true
-        layer?.backgroundColor = SettingsColors.shortcutFill.cgColor
-        layer?.borderColor = SettingsColors.shortcutBorder.cgColor
         layer?.borderWidth = 1
         focusRingType = .none
-        setButtonType(.momentaryPushIn)
+        setButtonType(.momentaryChange)
+        contentTintColor = nil
         attributedTitle = NSAttributedString(
             string: title,
             attributes: [
-                .font: NSFont.systemFont(ofSize: 13, weight: .regular),
-                .foregroundColor: NSColor.labelColor.withAlphaComponent(0.9)
+                .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+                .foregroundColor: accent ? NSColor.white : NSColor.labelColor.withAlphaComponent(0.9)
             ]
         )
+        // Give the label a bit of horizontal breathing room.
+        if let cell = cell as? NSButtonCell {
+            cell.imagePosition = .noImage
+        }
+        widthAnchorPadding()
+        hoverChanged()
     }
 
-    required init?(coder: NSCoder) {
-        nil
+    required init?(coder: NSCoder) { nil }
+
+    private func widthAnchorPadding() {
+        // Size to fit the title plus padding.
+        let width = (attributedTitle.size().width) + 34
+        widthAnchor.constraint(equalToConstant: width).isActive = true
+    }
+
+    override func hoverChanged() {
+        let fill: NSColor
+        let border: NSColor
+        if accent {
+            fill = NSColor.appAccent.withAlphaComponent(isHovered ? 1.0 : 0.9)
+            border = NSColor.appAccent.withAlphaComponent(isHovered ? 1.0 : 0.9)
+        } else {
+            fill = isHovered ? SettingsColors.controlFillHover : SettingsColors.controlFill
+            border = SettingsColors.controlBorder
+        }
+        layer?.backgroundColor = fill.cgColor
+        layer?.borderColor = border.cgColor
     }
 }
 
-private final class HotKeyRecorderButton: NSButton {
+private final class HotKeyRecorderButton: HoverButton {
     private var shortcut: HotKeyShortcut
     private let onRecord: (HotKeyShortcut) -> Void
     private var isRecordingShortcut = false
@@ -320,10 +397,10 @@ private final class HotKeyRecorderButton: NSButton {
         attributedTitle = NSAttributedString(string: "")
         isBordered = false
         wantsLayer = true
-        layer?.cornerRadius = 7
+        layer?.cornerRadius = 8
         layer?.masksToBounds = true
         focusRingType = .none
-        setButtonType(.momentaryPushIn)
+        setButtonType(.momentaryChange)
         target = self
         action = #selector(startRecording)
         setupContent()
@@ -342,6 +419,10 @@ private final class HotKeyRecorderButton: NSButton {
         true
     }
 
+    override func hoverChanged() {
+        updateAppearance()
+    }
+
     private func setupContent() {
         shortcutLabel.alignment = .center
         shortcutLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -349,8 +430,8 @@ private final class HotKeyRecorderButton: NSButton {
         shortcutLabel.isSelectable = false
         shortcutLabel.backgroundColor = .clear
 
-        closeImageView.image = LucideIconStore.menuImage("x", pointSize: 13)
-        closeImageView.contentTintColor = NSColor.labelColor.withAlphaComponent(0.82)
+        closeImageView.image = LucideIconStore.menuImage("x", pointSize: 12)
+        closeImageView.contentTintColor = NSColor.labelColor.withAlphaComponent(0.55)
         closeImageView.imageScaling = .scaleProportionallyDown
         closeImageView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -358,11 +439,11 @@ private final class HotKeyRecorderButton: NSButton {
         addSubview(closeImageView)
 
         NSLayoutConstraint.activate([
-            shortcutLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            shortcutLabel.centerXAnchor.constraint(equalTo: centerXAnchor, constant: -6),
             shortcutLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            shortcutLabel.widthAnchor.constraint(equalToConstant: 74),
+            shortcutLabel.widthAnchor.constraint(equalToConstant: 86),
 
-            closeImageView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            closeImageView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -9),
             closeImageView.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeImageView.widthAnchor.constraint(equalToConstant: 12),
             closeImageView.heightAnchor.constraint(equalToConstant: 12)
@@ -401,11 +482,11 @@ private final class HotKeyRecorderButton: NSButton {
     }
 
     private func updateAppearance() {
-        let text = isRecordingShortcut ? "Record shortcut" : shortcut.displayText
-        let font = NSFont.systemFont(ofSize: isRecordingShortcut ? 12 : 13, weight: .regular)
+        let text = isRecordingShortcut ? "Recording…" : shortcut.displayText
+        let font = NSFont.systemFont(ofSize: isRecordingShortcut ? 12 : 13, weight: .medium)
         let color = isRecordingShortcut
-            ? NSColor.controlAccentColor
-            : NSColor.labelColor.withAlphaComponent(0.88)
+            ? NSColor.appAccent
+            : NSColor.labelColor.withAlphaComponent(0.9)
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .center
 
@@ -418,14 +499,18 @@ private final class HotKeyRecorderButton: NSButton {
             ]
         )
         closeImageView.isHidden = isRecordingShortcut
-        layer?.backgroundColor = (isRecordingShortcut
-            ? NSColor.controlAccentColor.withAlphaComponent(0.14)
-            : SettingsColors.shortcutFill
-        ).cgColor
-        layer?.borderColor = (isRecordingShortcut
-            ? NSColor.controlAccentColor.withAlphaComponent(0.48)
-            : SettingsColors.shortcutBorder
-        ).cgColor
+
+        let fill: NSColor
+        let border: NSColor
+        if isRecordingShortcut {
+            fill = NSColor.appAccent.withAlphaComponent(0.16)
+            border = NSColor.appAccent.withAlphaComponent(0.5)
+        } else {
+            fill = isHovered ? SettingsColors.controlFillHover : SettingsColors.controlFill
+            border = SettingsColors.controlBorder
+        }
+        layer?.backgroundColor = fill.cgColor
+        layer?.borderColor = border.cgColor
         layer?.borderWidth = 1
     }
 
@@ -462,9 +547,9 @@ private final class HotKeyRecorderButton: NSButton {
 private extension NSView {
     func setupCardLayer() {
         wantsLayer = true
-        layer?.cornerRadius = 10
+        layer?.cornerRadius = 12
         layer?.masksToBounds = true
-        layer?.backgroundColor = SettingsColors.cardBackground.cgColor
+        layer?.backgroundColor = SettingsColors.cardFill.cgColor
         layer?.borderColor = SettingsColors.cardBorder.cgColor
         layer?.borderWidth = 1
     }
