@@ -3,6 +3,7 @@ import SwiftUI
 /// Shows the resolutions a pasted video offers as selectable boxes. Tapping one starts the download.
 struct ResolutionPickerView: View {
     let prompt: ResolutionPrompt
+    var isRefining: Bool = false
     let onSelect: (VideoResolution) -> Void
     let onCancel: () -> Void
 
@@ -10,9 +11,16 @@ struct ResolutionPickerView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Choose quality")
-                        .font(.system(size: 16, weight: .semibold))
-                    Text(prompt.subtitle)
+                    HStack(spacing: 7) {
+                        Text("Choose quality")
+                            .font(.system(size: 16, weight: .semibold))
+                        if isRefining {
+                            ProgressView()
+                                .controlSize(.small)
+                                .scaleEffect(0.7)
+                        }
+                    }
+                    Text(isRefining ? "Checking exact qualities…" : prompt.subtitle)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
