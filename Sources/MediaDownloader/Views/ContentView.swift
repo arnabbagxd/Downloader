@@ -19,6 +19,10 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             Color.clear
+            FileDropView(
+                onDropURLs: handleDroppedURLs,
+                onTargeted: { isDropTargeted = $0 }
+            )
             MouseMovementMonitor(
                 isActive: suppressHistoryHover,
                 onMouseMoved: restoreHistoryHover
@@ -110,9 +114,6 @@ struct ContentView: View {
             DropHighlightOverlay(isActive: isDropTargeted)
                 .allowsHitTesting(false)
         }
-        .onDrop(of: [.image, .fileURL, .url, .text, .plainText, .utf8PlainText], isTargeted: $isDropTargeted) { providers in
-            handleDrop(providers)
-        }
         .animation(.easeOut(duration: 0.16), value: isDropTargeted)
         .onAppear {
             installKeyboardRouter()
@@ -155,53 +156,16 @@ struct ContentView: View {
         "jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "bmp", "tiff", "tif", "avif"
     ]
 
-    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        let urlProviders = providers.filter { $0.canLoadObject(ofClass: URL.self) }
-
-        // No URL objects — fall back to a dragged text link.
-        guard !urlProviders.isEmpty else {
-            guard let textProvider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else {
-                return false
-            }
-            _ = textProvider.loadObject(ofClass: NSString.self) { string, _ in
-                guard let string = string as? String else { return }
-                DispatchQueue.main.async { model.handleDroppedText(string) }
-            }
-            return true
+    private func handleDroppedURLs(_ urls: [URL]) {
+        let imageFiles = urls.filter {
+            $0.isFileURL && Self.imageFileExtensions.contains($0.pathExtension.lowercased())
         }
 
-        // Gather every dropped URL, then decide: local image files → convert, web link → download.
-        var imageFiles: [URL] = []
-        var webURL: String?
-        let group = DispatchGroup()
-
-        for provider in urlProviders {
-            group.enter()
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                DispatchQueue.main.async {
-                    if let url {
-                        if url.isFileURL {
-                            if Self.imageFileExtensions.contains(url.pathExtension.lowercased()) {
-                                imageFiles.append(url)
-                            }
-                        } else {
-                            webURL = url.absoluteString
-                        }
-                    }
-                    group.leave()
-                }
-            }
+        if !imageFiles.isEmpty {
+            model.handleDroppedImageFiles(imageFiles)
+        } else if let webURL = urls.first(where: { !$0.isFileURL }) {
+            model.handleDroppedText(webURL.absoluteString)
         }
-
-        group.notify(queue: .main) {
-            if !imageFiles.isEmpty {
-                model.handleDroppedImageFiles(imageFiles)
-            } else if let webURL {
-                model.handleDroppedText(webURL)
-            }
-        }
-
-        return true
     }
 
     private var selectedHistoryItem: DownloadItem? {
@@ -528,6 +492,80 @@ private struct DropHighlightOverlay: View {
                 .scaleEffect(isActive ? 1 : 0.9)
         }
         .opacity(isActive ? 1 : 0)
+    }
+}
+
+/// AppKit-backed drop target. SwiftUI's `onDrop` doesn't reliably deliver the drop in a
+/// borderless window, so we read the dragging pasteboard directly, which is rock-solid.
+private struct FileDropView: NSViewRepresentable {
+    let onDropURLs: ([URL]) -> Void
+    let onTargeted: (Bool) -> Void
+
+    func makeNSView(context: Context) -> DropReceivingView {
+        let view = DropReceivingView()
+        view.onDropURLs = onDropURLs
+        view.onTargeted = onTargeted
+        return view
+    }
+
+    func updateNSView(_ nsView: DropReceivingView, context: Context) {
+        nsView.onDropURLs = onDropURLs
+        nsView.onTargeted = onTargeted
+    }
+
+    final class DropReceivingView: NSView {
+        var onDropURLs: ([URL]) -> Void = { _ in }
+        var onTargeted: (Bool) -> Void = { _ in }
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            registerForDraggedTypes([.fileURL, .URL, .string])
+        }
+
+        required init?(coder: NSCoder) {
+            super.init(coder: coder)
+            registerForDraggedTypes([.fileURL, .URL, .string])
+        }
+
+        // Bottom layer of the ZStack: interactive SwiftUI controls sit on top and receive
+        // clicks first; this view catches drags over the rest of the window.
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            onTargeted(true)
+            return .copy
+        }
+
+        override func draggingExited(_ sender: NSDraggingInfo?) {
+            onTargeted(false)
+        }
+
+        override func draggingEnded(_ sender: NSDraggingInfo) {
+            onTargeted(false)
+        }
+
+        override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { true }
+
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            onTargeted(false)
+            let pasteboard = sender.draggingPasteboard
+
+            var urls: [URL] = []
+            if let objects = pasteboard.readObjects(
+                forClasses: [NSURL.self],
+                options: [.urlReadingFileURLsOnly: false]
+            ) as? [URL] {
+                urls = objects
+            }
+
+            // Fall back to a plain-text URL (some apps drag links as strings).
+            if urls.isEmpty, let string = pasteboard.string(forType: .string),
+               let url = URL(string: string.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                urls = [url]
+            }
+
+            guard !urls.isEmpty else { return false }
+            onDropURLs(urls)
+            return true
+        }
     }
 }
 
