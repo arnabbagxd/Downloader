@@ -562,17 +562,19 @@ final class AppModel: ObservableObject {
         case .upToDate:
             guard manual else { return }
             let alert = NSAlert()
-            alert.messageText = "Download It is up to date"
-            alert.informativeText = "You are running version \(currentVersion)."
+            alert.messageText = "You're up to date"
+            alert.informativeText = "Download It \(currentVersion) is the latest version."
             alert.icon = NSImage(named: NSImage.applicationIconName)
             alert.addButton(withTitle: "OK")
             alert.runModal()
         case .updateAvailable(let update):
             let alert = NSAlert()
-            alert.messageText = "Download It \(update.version) is ready"
+            alert.messageText = "A new version is available"
+            let instructions = "Click Update to open the installer, then drag Download It "
+                + "into Applications to replace the current version (\(currentVersion))."
             alert.informativeText = downloadedUpdate == nil
-                ? "A new version is available. You are running \(currentVersion)."
-                : "The update has been downloaded in the background. You are running \(currentVersion)."
+                ? "Download It \(update.version) is out. \(instructions)"
+                : "Download It \(update.version) has already been downloaded. \(instructions)"
             alert.icon = NSImage(named: NSImage.applicationIconName)
             alert.addButton(withTitle: "Update")
             alert.addButton(withTitle: "Later")
@@ -589,7 +591,7 @@ final class AppModel: ObservableObject {
 
     private func presentUpdateError(_ error: Error) {
         let alert = NSAlert()
-        alert.messageText = "Could not check for updates"
+        alert.messageText = "Couldn't check for updates"
         alert.informativeText = error.localizedDescription
         alert.icon = NSImage(named: NSImage.applicationIconName)
         alert.addButton(withTitle: "OK")
