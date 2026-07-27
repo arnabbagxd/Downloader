@@ -167,6 +167,165 @@ actor MediaDownloaderService {
         return results
     }
 
+    /// Board/profile links can contain hundreds of pins; cap extraction so it stays bounded.
+    static let maxPinterestCollectionItems = 30
+
+    static func isPinterestLink(_ sourceURL: String) -> Bool {
+        guard let host = URL(string: sourceURL)?.host?.lowercased() else { return false }
+        return host.contains("pinterest.") || host == "pin.it" || host.hasSuffix(".pin.it")
+    }
+
+    /// Probes a Pinterest pin, Idea Pin, or board for every video/image it contains.
+    /// A single pin returns one item; a multi-page Idea Pin or a board returns several.
+    func probePinterestCollection(sourceURL: String) async throws -> PinterestCollectionResult {
+        guard let ytDlp = ToolManager.ytDlpPath else { throw MediaDownloaderError.missingTool("yt-dlp") }
+
+        var arguments = ["--no-warnings", "--ignore-no-formats-error", "-J"]
+        // A board/profile URL (no "/pin/" segment) can contain hundreds of pins; a single
+        // pin or Idea Pin URL is unaffected by this cap.
+        if !sourceURL.contains("/pin/") {
+            arguments += ["--playlist-items", "1-\(Self.maxPinterestCollectionItems)"]
+        }
+        arguments.append(sourceURL)
+
+        let output = try await runProcess(executable: ytDlp, arguments: arguments)
+        guard let data = output.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return PinterestCollectionResult(title: nil, items: [])
+        }
+
+        let rawOverallTitle = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let overallTitle = (rawOverallTitle?.isEmpty == false) ? rawOverallTitle : nil
+
+        let rawEntries = (json["entries"] as? [Any]) ?? [json]
+        var items: [PinterestCollectionItem] = []
+
+        for case let entry as [String: Any] in rawEntries {
+            var heights = Set<Int>()
+            if let formats = entry["formats"] as? [[String: Any]] {
+                for format in formats {
+                    if let vcodec = format["vcodec"] as? String, vcodec == "none" { continue }
+                    if let height = intValue(format["height"]), height > 0 {
+                        heights.insert(height)
+                    }
+                }
+            }
+            if heights.isEmpty, let height = intValue(entry["height"]), height > 0 {
+                heights.insert(height)
+            }
+
+            let imageURL: String? = heights.isEmpty
+                ? (entry["thumbnails"] as? [[String: Any]])?.last?["url"] as? String
+                : nil
+
+            // Skip entries that are neither a video nor an image (e.g. a private/deleted pin).
+            guard !heights.isEmpty || imageURL != nil else { continue }
+
+            let webpageURL = (entry["webpage_url"] as? String) ?? sourceURL
+            let rawTitle = (entry["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            items.append(PinterestCollectionItem(
+                webpageURL: webpageURL,
+                title: (rawTitle?.isEmpty == false) ? rawTitle : nil,
+                heights: heights.sorted(by: >),
+                imageURL: imageURL
+            ))
+        }
+
+        return PinterestCollectionResult(title: overallTitle, items: items)
+    }
+
+    /// Downloads every item in a Pinterest collection into a fresh temporary folder.
+    /// Returns the saved files plus that folder, so the caller can clean it up once
+    /// it's done with them (e.g. after zipping). One failed item doesn't stop the rest.
+    func downloadPinterestItems(
+        _ items: [PinterestCollectionItem],
+        onProgress: (@Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> (files: [URL], directory: URL) {
+        guard let ytDlp = ToolManager.ytDlpPath else { throw MediaDownloaderError.missingTool("yt-dlp") }
+        guard let ffmpeg = ToolManager.ffmpegPath else { throw MediaDownloaderError.missingTool("ffmpeg") }
+
+        let workingDirectory = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fileManager.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
+
+        var savedFiles: [URL] = []
+        let total = items.count
+
+        for (index, item) in items.enumerated() {
+            if item.isImage, let imageURLString = item.imageURL, let imageURL = URL(string: imageURLString) {
+                if let saved = try? await downloadPinterestImage(imageURL, title: item.title, index: index, total: total, into: workingDirectory) {
+                    savedFiles.append(saved)
+                }
+            } else if !item.heights.isEmpty {
+                if let saved = try? await downloadPinterestVideo(item, ytDlp: ytDlp, ffmpeg: ffmpeg, index: index, total: total, into: workingDirectory) {
+                    savedFiles.append(saved)
+                }
+            }
+
+            onProgress?(index + 1, total)
+        }
+
+        guard !savedFiles.isEmpty else {
+            try? fileManager.removeItem(at: workingDirectory)
+            throw MediaDownloaderError.missingOutputFile
+        }
+
+        return (savedFiles, workingDirectory)
+    }
+
+    private func downloadPinterestImage(
+        _ imageURL: URL,
+        title: String?,
+        index: Int,
+        total: Int,
+        into workingDirectory: URL
+    ) async throws -> URL {
+        let (temporaryURL, response) = try await URLSession.shared.download(from: imageURL)
+        let baseName = Self.imageBaseName(title: title, index: index, total: total)
+        let fileExtension = Self.imageExtension(response: response, url: imageURL)
+        let destination = Self.uniqueDestination(
+            in: workingDirectory, baseName: baseName, fileExtension: fileExtension, fileManager: fileManager
+        )
+        try fileManager.moveItem(at: temporaryURL, to: destination)
+        return destination
+    }
+
+    private func downloadPinterestVideo(
+        _ item: PinterestCollectionItem,
+        ytDlp: String,
+        ffmpeg: String,
+        index: Int,
+        total: Int,
+        into workingDirectory: URL
+    ) async throws -> URL {
+        let itemDirectory = workingDirectory.appendingPathComponent("item-\(index)", isDirectory: true)
+        try fileManager.createDirectory(at: itemDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: itemDirectory) }
+
+        _ = try await runProcess(executable: ytDlp, arguments: [
+            "--no-playlist", "--restrict-filenames",
+            "--merge-output-format", "mp4",
+            "--recode-video", "mp4",
+            "-S", "vcodec:h264,acodec:aac,ext:mp4:m4a",
+            "--ffmpeg-location", ffmpeg,
+            "-f", "bv*[height<=?1080]+ba/b[height<=?1080]",
+            "--paths", itemDirectory.path,
+            "--output", "%(title).120B.%(ext)s",
+            item.webpageURL
+        ])
+
+        guard let downloaded = try fileManager.contentsOfDirectory(at: itemDirectory, includingPropertiesForKeys: nil).first else {
+            throw MediaDownloaderError.missingOutputFile
+        }
+
+        let baseName = Self.imageBaseName(title: item.title, index: index, total: total)
+        let destination = Self.uniqueDestination(
+            in: workingDirectory, baseName: baseName, fileExtension: downloaded.pathExtension, fileManager: fileManager
+        )
+        try fileManager.moveItem(at: downloaded, to: destination)
+        return destination
+    }
+
     static func imageBaseName(title: String?, index: Int, total: Int) -> String {
         var base = (title ?? "Image").trimmingCharacters(in: .whitespacesAndNewlines)
         if base.isEmpty { base = "Image" }

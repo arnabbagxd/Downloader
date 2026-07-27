@@ -31,7 +31,7 @@ struct HistoryRowView: View {
 
     private var rowContent: some View {
         HStack(spacing: 14) {
-            ThumbnailView(path: item.thumbnailPath)
+            ThumbnailView(path: item.thumbnailPath, isZip: item.isZipFile)
                 .frame(width: 72, height: 54)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -218,6 +218,7 @@ private struct IconButton: View {
 
 private struct ThumbnailView: View {
     let path: String?
+    var isZip: Bool = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -234,7 +235,7 @@ private struct ThumbnailView: View {
                         Rectangle()
                             .fill(.quaternary)
 
-                        LucideIcon(name: "image", size: 22)
+                        LucideIcon(name: isZip ? "folder" : "image", size: 22)
                             .foregroundStyle(.secondary)
                     }
                     .frame(width: size.width, height: size.height)

@@ -19,6 +19,7 @@ final class AppModel: ObservableObject {
     private let historyStore = HistoryStore()
     private let downloader = MediaDownloaderService()
     private let imageConverter = ImageConversionService()
+    private let zipper = ZipService()
     private var pendingRemotePageURL: String?
     private let thumbnailGenerator = ThumbnailGenerator()
     private let trimExporter = TrimExportService()
@@ -336,6 +337,12 @@ final class AppModel: ObservableObject {
             return
         }
 
+        // Zip bundles aren't trimmable either — reveal so the user can extract it themselves.
+        if item.isZipFile {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.filePath)])
+            return
+        }
+
         activeTrimSession = ActiveTrimSession(item: item)
     }
 
@@ -380,6 +387,13 @@ final class AppModel: ObservableObject {
         }
 
         probeTask?.cancel()
+
+        // Pinterest needs its own path: a link might be a single pin (handled like any
+        // other site) or a board/Idea Pin with many items, which get bundled into a zip.
+        if MediaDownloaderService.isPinterestLink(sourceURL) {
+            await beginPinterestSelection(sourceURL)
+            return
+        }
 
         // Direct image links (…/photo.jpg) skip the lookup and go straight to the format picker.
         if let url = URL(string: sourceURL), Self.imageExtensions.contains(url.pathExtension.lowercased()) {
@@ -459,6 +473,107 @@ final class AppModel: ObservableObject {
             options: VideoResolution.options(from: probe.heights)
         )
         statusMessage = nil
+    }
+
+    /// Pinterest-specific entry point: a single pin behaves like any other link; a
+    /// multi-page Idea Pin or a board gets downloaded whole and bundled into a zip.
+    private func beginPinterestSelection(_ sourceURL: String) async {
+        resolutionPrompt = nil
+        conversionPrompt = nil
+        isProbing = true
+        statusMessage = "Checking the link..."
+
+        do {
+            let result = try await downloader.probePinterestCollection(sourceURL: sourceURL)
+            isProbing = false
+
+            guard !result.items.isEmpty else {
+                statusMessage = "No downloadable video or images were found at that link."
+                return
+            }
+
+            guard result.items.count > 1 else {
+                // Exactly one item: behave just like any other single-pin link.
+                let item = result.items[0]
+                if item.isImage, let imageURL = item.imageURL {
+                    pendingRemotePageURL = sourceURL
+                    conversionPrompt = ConversionPrompt(
+                        source: .remoteImages([imageURL]),
+                        title: item.title ?? result.title ?? sourceURL,
+                        allowsOriginal: true
+                    )
+                } else {
+                    resolutionPrompt = ResolutionPrompt(
+                        sourceURL: item.webpageURL,
+                        title: item.title ?? result.title ?? sourceURL,
+                        options: VideoResolution.options(from: item.heights)
+                    )
+                }
+                return
+            }
+
+            // Multiple items — download everything and bundle it into one zip.
+            let bundleTitle = result.title ?? "Pinterest"
+            await performPinterestBundleDownload(result.items, title: bundleTitle, sourceURL: sourceURL)
+        } catch {
+            isProbing = false
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    private func performPinterestBundleDownload(_ items: [PinterestCollectionItem], title: String, sourceURL: String) async {
+        guard !isDownloading else { return }
+        isDownloading = true
+        downloadProgress = 0
+        statusMessage = "Downloading 0 of \(items.count) items…"
+
+        do {
+            let (files, workingDirectory) = try await downloader.downloadPinterestItems(items) { [weak self] completed, total in
+                Task { @MainActor in
+                    self?.downloadProgress = Double(completed) / Double(total)
+                    self?.statusMessage = "Downloading \(completed) of \(total) items…"
+                }
+            }
+
+            statusMessage = "Bundling into a zip…"
+            let zipBaseName = MediaDownloaderService.imageBaseName(title: title, index: 0, total: 1)
+            let zipDestination = uniquePinterestZipURL(baseName: zipBaseName)
+            let savedZip = try await zipper.zip(files: files, to: zipDestination)
+            try? FileManager.default.removeItem(at: workingDirectory)
+
+            let historyItem = DownloadItem(
+                sourceURL: sourceURL,
+                title: zipBaseName,
+                filePath: savedZip.path,
+                thumbnailPath: nil,
+                createdAt: Date()
+            )
+            history.insert(historyItem, at: 0)
+            historyStore.save(history)
+            ClipboardService.copyFile(savedZip)
+            inputText = ""
+
+            let skipped = items.count - files.count
+            statusMessage = skipped > 0
+                ? "Bundled \(files.count) of \(items.count) items into a zip (\(skipped) skipped)."
+                : "Bundled \(files.count) items into a zip."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+
+        isDownloading = false
+        downloadProgress = 0
+    }
+
+    private func uniquePinterestZipURL(baseName: String) -> URL {
+        let folder = preferences.downloadFolder
+        var candidate = folder.appendingPathComponent(baseName).appendingPathExtension("zip")
+        var counter = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = folder.appendingPathComponent("\(baseName)-\(counter)").appendingPathExtension("zip")
+            counter += 1
+        }
+        return candidate
     }
 
     private static let imageExtensions: Set<String> = [
