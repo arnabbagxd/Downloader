@@ -51,6 +51,15 @@ struct VideoResolution: Identifiable, Equatable {
         }
         return result
     }
+
+    /// Shown instantly on paste (before the real lookup finishes) so the user never waits.
+    /// The `height<=?` selectors gracefully pick the best available at or below each cap.
+    static let provisionalOptions: [VideoResolution] = [
+        VideoResolution(height: nil),   // Best
+        VideoResolution(height: 1080),
+        VideoResolution(height: 720),
+        VideoResolution(height: 480)
+    ]
 }
 
 /// The result of probing a link: its title (if any), available video heights,

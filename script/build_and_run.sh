@@ -6,7 +6,7 @@ APP_NAME="MediaDownloader"
 DISPLAY_NAME="Download It"
 BUNDLE_ID="com.arnabbagxd.downloadit"
 MIN_SYSTEM_VERSION="14.0"
-APP_VERSION="${APP_VERSION:-1.0.0}"
+APP_VERSION="${APP_VERSION:-1.1.0}"
 APP_BUILD="${APP_BUILD:-1}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

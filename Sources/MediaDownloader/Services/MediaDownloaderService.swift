@@ -35,6 +35,8 @@ actor MediaDownloaderService {
             "--no-playlist",
             "--newline",
             "--restrict-filenames",
+            // Download in parallel pieces for a real throughput boost on fragmented sources.
+            "--concurrent-fragments", "4",
             "--merge-output-format", "mp4",
             "--recode-video", "mp4",
             "-S", "vcodec:h264,acodec:aac,ext:mp4:m4a",
