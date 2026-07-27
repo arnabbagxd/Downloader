@@ -597,15 +597,20 @@ final class AppModel: ObservableObject {
                 let zipDestination = uniquePinterestZipURL(baseName: zipBaseName)
                 let savedZip = try await zipper.zip(files: files, to: zipDestination)
 
-                let historyItem = DownloadItem(
-                    sourceURL: sourceURL,
-                    title: zipBaseName,
-                    filePath: savedZip.path,
-                    thumbnailPath: nil,
-                    createdAt: Date()
-                )
-                history.insert(historyItem, at: 0)
-                historyStore.save(history)
+                // Use the actual saved filename (which may have a "-2"/"-3" suffix if a
+                // same-named zip already existed) so repeat entries are distinguishable,
+                // and guard against inserting the identical entry twice in a row.
+                if history.first?.filePath != savedZip.path {
+                    let historyItem = DownloadItem(
+                        sourceURL: sourceURL,
+                        title: savedZip.deletingPathExtension().lastPathComponent,
+                        filePath: savedZip.path,
+                        thumbnailPath: nil,
+                        createdAt: Date()
+                    )
+                    history.insert(historyItem, at: 0)
+                    historyStore.save(history)
+                }
                 ClipboardService.copyFile(savedZip)
 
             case .individual:
