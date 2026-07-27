@@ -184,10 +184,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func centerWindowOnCurrentDisplay(_ window: NSWindow) {
         let visibleFrame = currentDisplayVisibleFrame()
         let windowSize = window.frame.size
-        window.setFrameOrigin(NSPoint(
+        var origin = NSPoint(
             x: visibleFrame.midX - windowSize.width / 2,
             y: visibleFrame.midY - windowSize.height / 2
-        ))
+        )
+
+        // Keep the window fully inside the visible screen area (never behind the menu
+        // bar or Dock), even if its size happens to exceed the available space.
+        origin.x = min(max(origin.x, visibleFrame.minX), max(visibleFrame.minX, visibleFrame.maxX - windowSize.width))
+        origin.y = min(max(origin.y, visibleFrame.minY), max(visibleFrame.minY, visibleFrame.maxY - windowSize.height))
+
+        window.setFrameOrigin(origin)
     }
 
     private func currentDisplayVisibleFrame() -> NSRect {
@@ -197,9 +204,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func preferredWindowSize(for visibleFrame: NSRect) -> NSSize {
+        // Never request more space than the screen actually has (menu bar / Dock already
+        // excluded from visibleFrame) — a forced minimum here previously pushed the window
+        // taller than some MacBook screens' usable height, clipping it behind the menu bar.
         NSSize(
-            width: min(860, max(760, visibleFrame.width - 32)),
-            height: min(1060, max(760, visibleFrame.height - 24))
+            width: min(860, max(480, visibleFrame.width - 32)),
+            height: min(1060, max(480, visibleFrame.height - 24))
         )
     }
 
