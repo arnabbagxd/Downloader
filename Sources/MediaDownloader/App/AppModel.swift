@@ -7,13 +7,24 @@ final class AppModel: ObservableObject {
     @Published private(set) var history: [DownloadItem] = []
     @Published private(set) var isDownloading = false
     @Published private(set) var downloadProgress: Double = 0
-    @Published var statusMessage: String?
+    @Published var statusMessage: String? {
+        didSet {
+            statusMessageDismissTask?.cancel()
+            guard statusMessage != nil else { return }
+            statusMessageDismissTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                guard !Task.isCancelled else { return }
+                self?.statusMessage = nil
+            }
+        }
+    }
     @Published var activeTrimSession: ActiveTrimSession?
     @Published private(set) var isCheckingForUpdates = false
     @Published private(set) var isProbing = false
     @Published private(set) var isRefiningResolutions = false
     @Published var resolutionPrompt: ResolutionPrompt?
     @Published var conversionPrompt: ConversionPrompt?
+    @Published var pinterestDownloadPrompt: PinterestDownloadPrompt?
     @Published private(set) var pinterestBundleStatus: PinterestBundleStatus?
 
     private let preferences = PreferencesStore()
@@ -27,6 +38,7 @@ final class AppModel: ObservableObject {
     private let updateChecker = UpdateChecker()
     private var pasteTask: Task<Void, Never>?
     private var probeTask: Task<Void, Never>?
+    private var statusMessageDismissTask: Task<Void, Never>?
     private var probeCache: [String: VideoProbe] = [:]
     private var didRunAutomaticUpdateCheck = false
     private var settingsWindowController: SettingsWindowController?
@@ -477,10 +489,11 @@ final class AppModel: ObservableObject {
     }
 
     /// Pinterest-specific entry point: a single pin behaves like any other link; a
-    /// multi-page Idea Pin or a board gets downloaded whole and bundled into a zip.
+    /// multi-page Idea Pin or a board shows a choice of how to save it before downloading.
     private func beginPinterestSelection(_ sourceURL: String) async {
         resolutionPrompt = nil
         conversionPrompt = nil
+        pinterestDownloadPrompt = nil
         isProbing = true
         statusMessage = "Checking the link..."
 
@@ -513,52 +526,101 @@ final class AppModel: ObservableObject {
                 return
             }
 
-            // Multiple items — download everything and bundle it into one zip.
-            let bundleTitle = result.title ?? "Pinterest"
-            await performPinterestBundleDownload(result.items, title: bundleTitle, sourceURL: sourceURL)
+            // Multiple items: let the user choose zip vs. separate files, and a format
+            // for the images, before downloading anything.
+            statusMessage = nil
+            pinterestDownloadPrompt = PinterestDownloadPrompt(
+                sourceURL: sourceURL,
+                title: result.title ?? "Pinterest",
+                items: result.items
+            )
         } catch {
             isProbing = false
             statusMessage = error.localizedDescription
         }
     }
 
-    private func performPinterestBundleDownload(_ items: [PinterestCollectionItem], title: String, sourceURL: String) async {
+    /// Called when the user confirms their choice on the Pinterest save-options card.
+    func choosePinterestSaveMode(_ mode: PinterestSaveMode, imageFormat: ImageFormat?, quality: Int) {
+        guard let prompt = pinterestDownloadPrompt else { return }
+        pinterestDownloadPrompt = nil
+        Task { [weak self] in
+            await self?.performPinterestBundleDownload(
+                prompt.items,
+                title: prompt.title,
+                sourceURL: prompt.sourceURL,
+                saveMode: mode,
+                imageFormat: imageFormat,
+                quality: quality
+            )
+        }
+    }
+
+    /// Dismisses the Pinterest save-options card without downloading.
+    func cancelPinterestSelection() {
+        pinterestDownloadPrompt = nil
+    }
+
+    private func performPinterestBundleDownload(
+        _ items: [PinterestCollectionItem],
+        title: String,
+        sourceURL: String,
+        saveMode: PinterestSaveMode,
+        imageFormat: ImageFormat?,
+        quality: Int
+    ) async {
         guard !isDownloading else { return }
         isDownloading = true
         downloadProgress = 0
-        pinterestBundleStatus = PinterestBundleStatus(phase: .downloading, completed: 0, total: items.count, title: title)
+        pinterestBundleStatus = PinterestBundleStatus(phase: .downloading, completed: 0, total: items.count, title: title, saveMode: saveMode)
 
         do {
-            let (files, workingDirectory) = try await downloader.downloadPinterestItems(items) { [weak self] completed, total in
+            var (files, workingDirectory) = try await downloader.downloadPinterestItems(items) { [weak self] completed, total in
                 Task { @MainActor in
                     guard let self else { return }
                     self.downloadProgress = Double(completed) / Double(total)
-                    self.pinterestBundleStatus = PinterestBundleStatus(phase: .downloading, completed: completed, total: total, title: title)
+                    self.pinterestBundleStatus = PinterestBundleStatus(phase: .downloading, completed: completed, total: total, title: title, saveMode: saveMode)
                 }
             }
 
-            pinterestBundleStatus = PinterestBundleStatus(phase: .zipping, completed: items.count, total: items.count, title: title)
-            let zipBaseName = MediaDownloaderService.imageBaseName(title: title, index: 0, total: 1)
-            let zipDestination = uniquePinterestZipURL(baseName: zipBaseName)
-            let savedZip = try await zipper.zip(files: files, to: zipDestination)
-            try? FileManager.default.removeItem(at: workingDirectory)
+            // Convert images to the chosen format, if the user picked one other than "Original".
+            if let imageFormat {
+                pinterestBundleStatus = PinterestBundleStatus(phase: .converting, completed: 0, total: files.count, title: title, saveMode: saveMode)
+                files = await convertImages(in: files, to: imageFormat, quality: quality, workingDirectory: workingDirectory)
+            }
 
-            let historyItem = DownloadItem(
-                sourceURL: sourceURL,
-                title: zipBaseName,
-                filePath: savedZip.path,
-                thumbnailPath: nil,
-                createdAt: Date()
-            )
-            history.insert(historyItem, at: 0)
-            historyStore.save(history)
-            ClipboardService.copyFile(savedZip)
+            pinterestBundleStatus = PinterestBundleStatus(phase: .finishing, completed: items.count, total: items.count, title: title, saveMode: saveMode)
+
+            switch saveMode {
+            case .zip:
+                let zipBaseName = MediaDownloaderService.imageBaseName(title: title, index: 0, total: 1)
+                let zipDestination = uniquePinterestZipURL(baseName: zipBaseName)
+                let savedZip = try await zipper.zip(files: files, to: zipDestination)
+
+                let historyItem = DownloadItem(
+                    sourceURL: sourceURL,
+                    title: zipBaseName,
+                    filePath: savedZip.path,
+                    thumbnailPath: nil,
+                    createdAt: Date()
+                )
+                history.insert(historyItem, at: 0)
+                historyStore.save(history)
+                ClipboardService.copyFile(savedZip)
+
+            case .individual:
+                await insertPinterestIndividualHistory(files, sourceURL: sourceURL)
+            }
+
+            try? FileManager.default.removeItem(at: workingDirectory)
             inputText = ""
 
             let skipped = items.count - files.count
+            let verb = saveMode == .zip ? "Bundled" : "Saved"
+            let destination = saveMode == .zip ? "into a zip" : "as separate files"
             statusMessage = skipped > 0
-                ? "Bundled \(files.count) of \(items.count) items into a zip (\(skipped) skipped)."
-                : "Bundled \(files.count) items into a zip."
+                ? "\(verb) \(files.count) of \(items.count) items \(destination) (\(skipped) skipped)."
+                : "\(verb) \(files.count) items \(destination)."
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -566,6 +628,77 @@ final class AppModel: ObservableObject {
         pinterestBundleStatus = nil
         isDownloading = false
         downloadProgress = 0
+    }
+
+    /// Converts every image among the downloaded files to the chosen format, in place
+    /// within the working directory. Videos pass through untouched.
+    private func convertImages(in files: [URL], to format: ImageFormat, quality: Int, workingDirectory: URL) async -> [URL] {
+        var result: [URL] = []
+        for file in files {
+            guard Self.imageExtensions.contains(file.pathExtension.lowercased()) else {
+                result.append(file)
+                continue
+            }
+
+            do {
+                let converted = try await imageConverter.convert(
+                    sourceURL: file,
+                    to: format,
+                    quality: quality,
+                    destinationFolder: workingDirectory,
+                    preferredBaseName: file.deletingPathExtension().lastPathComponent
+                )
+                try? FileManager.default.removeItem(at: file)
+                result.append(converted)
+            } catch {
+                // Keep the original if conversion fails for this one file.
+                result.append(file)
+            }
+        }
+        return result
+    }
+
+    /// Saves each file from a Pinterest collection into the download folder as its own
+    /// history entry, instead of bundling them into a zip.
+    private func insertPinterestIndividualHistory(_ files: [URL], sourceURL: String) async {
+        guard !files.isEmpty else { return }
+        var savedURLs: [URL] = []
+
+        for file in files {
+            let destinationFolder = preferences.downloadFolder
+            try? FileManager.default.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
+            let destination = uniqueDestination(in: destinationFolder, baseName: file.deletingPathExtension().lastPathComponent, fileExtension: file.pathExtension)
+            guard (try? FileManager.default.copyItem(at: file, to: destination)) != nil else { continue }
+            savedURLs.append(destination)
+        }
+
+        for output in savedURLs.reversed() {
+            let isImage = Self.imageExtensions.contains(output.pathExtension.lowercased())
+            let thumbnailPath = isImage ? output.path : (try? await thumbnailGenerator.thumbnailPath(for: output))?.path
+            let item = DownloadItem(
+                sourceURL: sourceURL,
+                title: output.deletingPathExtension().lastPathComponent,
+                filePath: output.path,
+                thumbnailPath: thumbnailPath,
+                createdAt: Date()
+            )
+            history.insert(item, at: 0)
+        }
+        historyStore.save(history)
+
+        if let first = savedURLs.first {
+            ClipboardService.copyFile(first)
+        }
+    }
+
+    private func uniqueDestination(in folder: URL, baseName: String, fileExtension: String) -> URL {
+        var candidate = folder.appendingPathComponent(baseName).appendingPathExtension(fileExtension)
+        var counter = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = folder.appendingPathComponent("\(baseName)-\(counter)").appendingPathExtension(fileExtension)
+            counter += 1
+        }
+        return candidate
     }
 
     private func uniquePinterestZipURL(baseName: String) -> URL {

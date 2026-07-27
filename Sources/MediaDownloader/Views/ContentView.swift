@@ -51,6 +51,13 @@ struct ContentView: View {
                 } else if let bundleStatus = model.pinterestBundleStatus {
                     PinterestBundleProgressView(status: bundleStatus)
                         .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                } else if let pinterestPrompt = model.pinterestDownloadPrompt {
+                    PinterestOptionsPickerView(
+                        prompt: pinterestPrompt,
+                        onConfirm: model.choosePinterestSaveMode,
+                        onCancel: model.cancelPinterestSelection
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
                 } else if let prompt = model.resolutionPrompt {
                     ResolutionPickerView(
                         prompt: prompt,
@@ -117,6 +124,16 @@ struct ContentView: View {
 
             DropHighlightOverlay(isActive: isDropTargeted)
                 .allowsHitTesting(false)
+
+            VStack {
+                Spacer()
+                if let message = model.statusMessage {
+                    StatusToastView(message: message)
+                        .padding(.bottom, 18)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+            }
+            .allowsHitTesting(false)
         }
         .animation(.easeOut(duration: 0.16), value: isDropTargeted)
         .onAppear {
@@ -155,6 +172,8 @@ struct ContentView: View {
         .animation(.easeOut(duration: 0.2), value: model.resolutionPrompt)
         .animation(.easeOut(duration: 0.2), value: model.conversionPrompt)
         .animation(.easeOut(duration: 0.2), value: model.pinterestBundleStatus)
+        .animation(.easeOut(duration: 0.2), value: model.pinterestDownloadPrompt)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: model.statusMessage)
     }
 
     private static let imageFileExtensions: Set<String> = [
@@ -466,6 +485,29 @@ private struct EmptyHistoryView: View {
         .frame(width: 680)
         .padding(.vertical, 44)
         .onAppear { floating = true }
+    }
+}
+
+/// Small floating banner for status/error text (e.g. download results, failures) that
+/// would otherwise have nowhere to appear and silently vanish.
+private struct StatusToastView: View {
+    let message: String
+
+    var body: some View {
+        Text(message)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(.primary)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.ultraThinMaterial, in: Capsule(style: .continuous))
+            .overlay {
+                Capsule(style: .continuous)
+                    .strokeBorder(.white.opacity(0.16), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.22), radius: 16, x: 0, y: 8)
+            .frame(maxWidth: 560)
     }
 }
 

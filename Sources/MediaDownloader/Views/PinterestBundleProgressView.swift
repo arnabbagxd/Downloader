@@ -1,9 +1,29 @@
 import SwiftUI
 
-/// Shown while a Pinterest board/Idea Pin is being downloaded and zipped — this can take
+/// Shown while a Pinterest board/Idea Pin is being downloaded and saved — this can take
 /// a while (several items in sequence), so it makes the activity impossible to miss.
 struct PinterestBundleProgressView: View {
     let status: PinterestBundleStatus
+
+    private var title: String {
+        switch status.phase {
+        case .downloading: return "Downloading \(status.title)"
+        case .converting: return "Converting images…"
+        case .finishing: return status.saveMode == .zip ? "Bundling into a zip…" : "Saving files…"
+        }
+    }
+
+    private var subtitle: String {
+        switch status.phase {
+        case .downloading: return "Downloading \(status.completed) of \(status.total) items…"
+        case .converting: return "Converting \(status.total) images…"
+        case .finishing: return status.saveMode == .zip ? "Packing \(status.total) items…" : "Saving \(status.total) items…"
+        }
+    }
+
+    private var fraction: Double {
+        status.phase == .downloading ? status.fraction : 1
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -12,14 +32,12 @@ struct PinterestBundleProgressView: View {
                     .controlSize(.small)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(status.phase == .zipping ? "Bundling into a zip…" : "Bundling \(status.title)")
+                    Text(title)
                         .font(.system(size: 15, weight: .semibold))
                         .lineLimit(1)
                         .truncationMode(.tail)
 
-                    Text(status.phase == .zipping
-                         ? "Packing \(status.total) items…"
-                         : "Downloading \(status.completed) of \(status.total) items…")
+                    Text(subtitle)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
@@ -27,7 +45,7 @@ struct PinterestBundleProgressView: View {
                 Spacer(minLength: 0)
             }
 
-            ProgressView(value: status.phase == .zipping ? 1 : status.fraction)
+            ProgressView(value: fraction)
                 .tint(.appAccent)
         }
         .padding(20)
