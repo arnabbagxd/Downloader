@@ -2,7 +2,14 @@
 dist/
 .DS_Store
 *.xcuserdata
+*.xcuserstate
+.swiftpm/
 DerivedData/
+
+# Local agent-skill artifacts and design-audit scratch (not part of the app)
+.agents/
+skills-lock.json
+audit/
 
 # Local signing/notarization secrets
 .env
