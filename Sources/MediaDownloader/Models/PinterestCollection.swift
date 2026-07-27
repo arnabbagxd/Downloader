@@ -18,3 +18,18 @@ struct PinterestCollectionResult {
     let title: String?
     let items: [PinterestCollectionItem]
 }
+
+/// Live progress while a Pinterest board/Idea Pin is being downloaded and bundled,
+/// shown as a dedicated card so it's obvious the app is working (this can take a while).
+struct PinterestBundleStatus: Equatable {
+    enum Phase: Equatable { case downloading, zipping }
+
+    let phase: Phase
+    let completed: Int
+    let total: Int
+    let title: String
+
+    var fraction: Double {
+        total > 0 ? Double(completed) / Double(total) : 0
+    }
+}

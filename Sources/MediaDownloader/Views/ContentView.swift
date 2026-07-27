@@ -48,6 +48,9 @@ struct ContentView: View {
                 if model.isProbing {
                     ProbingCard()
                         .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                } else if let bundleStatus = model.pinterestBundleStatus {
+                    PinterestBundleProgressView(status: bundleStatus)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
                 } else if let prompt = model.resolutionPrompt {
                     ResolutionPickerView(
                         prompt: prompt,
@@ -151,6 +154,7 @@ struct ContentView: View {
         .animation(.easeOut(duration: 0.2), value: model.isProbing)
         .animation(.easeOut(duration: 0.2), value: model.resolutionPrompt)
         .animation(.easeOut(duration: 0.2), value: model.conversionPrompt)
+        .animation(.easeOut(duration: 0.2), value: model.pinterestBundleStatus)
     }
 
     private static let imageFileExtensions: Set<String> = [

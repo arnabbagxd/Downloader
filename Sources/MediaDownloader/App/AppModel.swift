@@ -14,6 +14,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var isRefiningResolutions = false
     @Published var resolutionPrompt: ResolutionPrompt?
     @Published var conversionPrompt: ConversionPrompt?
+    @Published private(set) var pinterestBundleStatus: PinterestBundleStatus?
 
     private let preferences = PreferencesStore()
     private let historyStore = HistoryStore()
@@ -525,17 +526,18 @@ final class AppModel: ObservableObject {
         guard !isDownloading else { return }
         isDownloading = true
         downloadProgress = 0
-        statusMessage = "Downloading 0 of \(items.count) items…"
+        pinterestBundleStatus = PinterestBundleStatus(phase: .downloading, completed: 0, total: items.count, title: title)
 
         do {
             let (files, workingDirectory) = try await downloader.downloadPinterestItems(items) { [weak self] completed, total in
                 Task { @MainActor in
-                    self?.downloadProgress = Double(completed) / Double(total)
-                    self?.statusMessage = "Downloading \(completed) of \(total) items…"
+                    guard let self else { return }
+                    self.downloadProgress = Double(completed) / Double(total)
+                    self.pinterestBundleStatus = PinterestBundleStatus(phase: .downloading, completed: completed, total: total, title: title)
                 }
             }
 
-            statusMessage = "Bundling into a zip…"
+            pinterestBundleStatus = PinterestBundleStatus(phase: .zipping, completed: items.count, total: items.count, title: title)
             let zipBaseName = MediaDownloaderService.imageBaseName(title: title, index: 0, total: 1)
             let zipDestination = uniquePinterestZipURL(baseName: zipBaseName)
             let savedZip = try await zipper.zip(files: files, to: zipDestination)
@@ -561,6 +563,7 @@ final class AppModel: ObservableObject {
             statusMessage = error.localizedDescription
         }
 
+        pinterestBundleStatus = nil
         isDownloading = false
         downloadProgress = 0
     }
