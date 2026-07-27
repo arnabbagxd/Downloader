@@ -11,6 +11,7 @@ final class AppModel: ObservableObject {
     @Published var activeTrimSession: ActiveTrimSession?
     @Published private(set) var isCheckingForUpdates = false
     @Published private(set) var isProbing = false
+    @Published private(set) var isRefiningResolutions = false
     @Published var resolutionPrompt: ResolutionPrompt?
     @Published var conversionPrompt: ConversionPrompt?
 
@@ -23,6 +24,8 @@ final class AppModel: ObservableObject {
     private let trimExporter = TrimExportService()
     private let updateChecker = UpdateChecker()
     private var pasteTask: Task<Void, Never>?
+    private var probeTask: Task<Void, Never>?
+    private var probeCache: [String: VideoProbe] = [:]
     private var didRunAutomaticUpdateCheck = false
     private var settingsWindowController: SettingsWindowController?
 
@@ -58,7 +61,7 @@ final class AppModel: ObservableObject {
         }
 
         pasteTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            try? await Task.sleep(nanoseconds: 150_000_000)
             guard !Task.isCancelled else { return }
             await self?.beginResolutionSelection(candidate)
         }
@@ -92,6 +95,8 @@ final class AppModel: ObservableObject {
         guard let prompt = resolutionPrompt else { return }
         let sourceURL = prompt.sourceURL
         resolutionPrompt = nil
+        probeTask?.cancel()
+        isRefiningResolutions = false
         Task { [weak self] in
             await self?.performDownload(sourceURL, formatSelector: resolution.formatSelector)
         }
@@ -101,6 +106,8 @@ final class AppModel: ObservableObject {
     func cancelResolutionSelection() {
         resolutionPrompt = nil
         pasteTask?.cancel()
+        probeTask?.cancel()
+        isRefiningResolutions = false
     }
 
     /// Handles local image files dragged onto the window — shows the format picker.
@@ -363,18 +370,21 @@ final class AppModel: ObservableObject {
         ClipboardService.copyFile(trimmedURL)
     }
 
-    /// Probes the pasted link for its available resolutions and shows the picker boxes.
+    /// Shows quality boxes immediately, then refines them from the real lookup in the background.
     private func beginResolutionSelection(_ rawURL: String) async {
         let sourceURL = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !isDownloading, !isProbing else { return }
+        guard !isDownloading else { return }
         guard URLValidator.looksLikeWebURL(sourceURL) else {
             statusMessage = "Enter a valid URL."
             return
         }
 
-        // Direct image links (…/photo.jpg) skip the probe and go straight to the format picker.
+        probeTask?.cancel()
+
+        // Direct image links (…/photo.jpg) skip the lookup and go straight to the format picker.
         if let url = URL(string: sourceURL), Self.imageExtensions.contains(url.pathExtension.lowercased()) {
             pendingRemotePageURL = sourceURL
+            resolutionPrompt = nil
             conversionPrompt = ConversionPrompt(
                 source: .remoteImages([sourceURL]),
                 title: url.lastPathComponent,
@@ -383,43 +393,72 @@ final class AppModel: ObservableObject {
             return
         }
 
-        isProbing = true
-        resolutionPrompt = nil
-        conversionPrompt = nil
-        statusMessage = "Checking the link..."
-
-        do {
-            let probe = try await downloader.probe(sourceURL: sourceURL)
-
-            if probe.isImagePost {
-                // Images have one size — offer a format choice instead of resolution boxes.
-                isProbing = false
-                pendingRemotePageURL = sourceURL
-                conversionPrompt = ConversionPrompt(
-                    source: .remoteImages(probe.imageURLs),
-                    title: probe.title ?? sourceURL,
-                    allowsOriginal: true
-                )
-                return
-            }
-
-            guard !probe.heights.isEmpty else {
-                statusMessage = "No downloadable video or images were found at that link."
-                isProbing = false
-                return
-            }
-
-            resolutionPrompt = ResolutionPrompt(
-                sourceURL: sourceURL,
-                title: probe.title,
-                options: VideoResolution.options(from: probe.heights)
-            )
-            statusMessage = nil
-        } catch {
-            statusMessage = error.localizedDescription
+        // Seen this link already? Use the cached result instantly — no wait at all.
+        if let cached = probeCache[sourceURL] {
+            conversionPrompt = nil
+            applyProbeResult(cached, sourceURL: sourceURL, isInitial: true)
+            return
         }
 
-        isProbing = false
+        // Show quality boxes right away so the user never stares at a spinner.
+        conversionPrompt = nil
+        statusMessage = nil
+        resolutionPrompt = ResolutionPrompt(
+            sourceURL: sourceURL,
+            title: sourceURL,
+            options: VideoResolution.provisionalOptions
+        )
+        isRefiningResolutions = true
+
+        // Look up the real title + available resolutions in the background, then refine.
+        probeTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let probe = try await self.downloader.probe(sourceURL: sourceURL)
+                guard !Task.isCancelled else { return }
+                self.probeCache[sourceURL] = probe
+                self.applyProbeResult(probe, sourceURL: sourceURL, isInitial: false)
+            } catch {
+                // Keep the provisional boxes so the user can still try downloading.
+            }
+            self.isRefiningResolutions = false
+        }
+    }
+
+    /// Applies a completed lookup: refine the boxes, switch to the image format picker, or report nothing found.
+    private func applyProbeResult(_ probe: VideoProbe, sourceURL: String, isInitial: Bool) {
+        guard !isDownloading else { return }
+        // For a background refine, only act if the user is still viewing this link's boxes.
+        if !isInitial {
+            guard resolutionPrompt?.sourceURL == sourceURL else { return }
+        }
+
+        if probe.isImagePost {
+            // Images have one size — offer a format choice instead of resolution boxes.
+            resolutionPrompt = nil
+            isRefiningResolutions = false
+            pendingRemotePageURL = sourceURL
+            conversionPrompt = ConversionPrompt(
+                source: .remoteImages(probe.imageURLs),
+                title: probe.title ?? sourceURL,
+                allowsOriginal: true
+            )
+            return
+        }
+
+        guard !probe.heights.isEmpty else {
+            resolutionPrompt = nil
+            isRefiningResolutions = false
+            statusMessage = "No downloadable video or images were found at that link."
+            return
+        }
+
+        resolutionPrompt = ResolutionPrompt(
+            sourceURL: sourceURL,
+            title: probe.title ?? sourceURL,
+            options: VideoResolution.options(from: probe.heights)
+        )
+        statusMessage = nil
     }
 
     private static let imageExtensions: Set<String> = [

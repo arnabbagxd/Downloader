@@ -51,6 +51,7 @@ struct ContentView: View {
                 } else if let prompt = model.resolutionPrompt {
                     ResolutionPickerView(
                         prompt: prompt,
+                        isRefining: model.isRefiningResolutions,
                         onSelect: model.chooseResolution,
                         onCancel: model.cancelResolutionSelection
                     )
