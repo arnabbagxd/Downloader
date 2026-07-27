@@ -9,7 +9,7 @@ DISPLAY_NAME="Download It"            # user-facing app name (bundle + Finder)
 ARTIFACT_NAME="DownloadIt"           # slug for the DMG filename (no spaces)
 BUNDLE_ID="${BUNDLE_ID:-com.arnabbagxd.downloadit}"
 MIN_SYSTEM_VERSION="14.0"
-APP_VERSION="${APP_VERSION:-1.1.0}"
+APP_VERSION="${APP_VERSION:-1.1.1}"
 APP_BUILD="${APP_BUILD:-1}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
