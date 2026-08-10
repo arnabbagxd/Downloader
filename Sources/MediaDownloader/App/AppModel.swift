@@ -21,11 +21,14 @@ final class AppModel: ObservableObject {
     @Published var activeTrimSession: ActiveTrimSession?
     @Published private(set) var isCheckingForUpdates = false
     @Published private(set) var isProbing = false
+    @Published private(set) var probingMessage = "Checking the link…"
     @Published private(set) var isRefiningResolutions = false
     @Published var resolutionPrompt: ResolutionPrompt?
     @Published var conversionPrompt: ConversionPrompt?
-    @Published var pinterestDownloadPrompt: PinterestDownloadPrompt?
-    @Published private(set) var pinterestBundleStatus: PinterestBundleStatus?
+    @Published var collectionDownloadPrompt: CollectionDownloadPrompt?
+    @Published private(set) var collectionBundleStatus: CollectionBundleStatus?
+    @Published var playlistDownloadPrompt: PlaylistDownloadPrompt?
+    @Published private(set) var playlistDownloadStatus: PlaylistDownloadStatus?
 
     private let preferences = PreferencesStore()
     private let historyStore = HistoryStore()
@@ -404,8 +407,23 @@ final class AppModel: ObservableObject {
         // Pinterest needs its own path: a link might be a single pin (handled like any
         // other site) or a board/Idea Pin with many items, which get bundled into a zip.
         if MediaDownloaderService.isPinterestLink(sourceURL) {
-            await beginPinterestSelection(sourceURL)
+            await beginCollectionSelection(sourceURL, source: .pinterest, capItems: !sourceURL.contains("/pin/"))
             return
+        }
+
+        // A full Instagram profile link offers to bundle every post it contains, just
+        // like a Pinterest board; a single post/reel/story falls through to normal flow.
+        if MediaDownloaderService.isInstagramProfileLink(sourceURL) {
+            await beginCollectionSelection(sourceURL, source: .instagram, capItems: true)
+            return
+        }
+
+        // Playlist/channel links get a confirmation card offering to download every
+        // video; a link that only looks like one (but isn't) falls through below.
+        if MediaDownloaderService.mightBePlaylistOrChannel(sourceURL) {
+            if await beginPlaylistSelection(sourceURL) {
+                return
+            }
         }
 
         // Direct image links (…/photo.jpg) skip the lookup and go straight to the format picker.
@@ -488,17 +506,108 @@ final class AppModel: ObservableObject {
         statusMessage = nil
     }
 
-    /// Pinterest-specific entry point: a single pin behaves like any other link; a
-    /// multi-page Idea Pin or a board shows a choice of how to save it before downloading.
-    private func beginPinterestSelection(_ sourceURL: String) async {
+    /// Checks whether a link that looks like a playlist/channel actually is one. Shows a
+    /// confirmation card and returns `true` if so; returns `false` (having touched no
+    /// state) when it turns out to be a single video, so the caller can fall back.
+    private func beginPlaylistSelection(_ sourceURL: String) async -> Bool {
+        isProbing = true
+        probingMessage = "Checking whether this is a playlist…"
+        statusMessage = "Checking the link..."
+
+        let result = try? await downloader.probePlaylist(sourceURL: sourceURL)
+        isProbing = false
+
+        guard let result, !result.entries.isEmpty else {
+            statusMessage = nil
+            return false
+        }
+
+        statusMessage = nil
+        playlistDownloadPrompt = PlaylistDownloadPrompt(
+            sourceURL: sourceURL,
+            title: result.title ?? "Playlist",
+            entries: result.entries
+        )
+        return true
+    }
+
+    /// Called when the user confirms the playlist download card.
+    func choosePlaylistDownload() {
+        guard let prompt = playlistDownloadPrompt else { return }
+        playlistDownloadPrompt = nil
+        Task { [weak self] in
+            await self?.performPlaylistDownload(prompt.entries, title: prompt.title, sourceURL: prompt.sourceURL)
+        }
+    }
+
+    /// Dismisses the playlist confirmation card without downloading.
+    func cancelPlaylistSelection() {
+        playlistDownloadPrompt = nil
+    }
+
+    private func performPlaylistDownload(_ entries: [PlaylistEntry], title: String, sourceURL: String) async {
+        guard !isDownloading else { return }
+        isDownloading = true
+        downloadProgress = 0
+        playlistDownloadStatus = PlaylistDownloadStatus(title: title, completed: 0, total: entries.count, currentItemTitle: nil)
+
+        do {
+            let results = try await downloader.downloadPlaylistItems(
+                entries,
+                destinationFolder: preferences.downloadFolder,
+                formatSelector: nil
+            ) { [weak self] index, total, itemTitle in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.downloadProgress = Double(index) / Double(total)
+                    self.playlistDownloadStatus = PlaylistDownloadStatus(title: title, completed: index, total: total, currentItemTitle: itemTitle)
+                }
+            }
+
+            for result in results.reversed() {
+                let thumbnailPath = try? await thumbnailGenerator.thumbnailPath(for: result.fileURL)
+                let item = DownloadItem(
+                    sourceURL: sourceURL,
+                    title: result.title,
+                    filePath: result.fileURL.path,
+                    thumbnailPath: thumbnailPath?.path,
+                    createdAt: Date()
+                )
+                history.insert(item, at: 0)
+            }
+            historyStore.save(history)
+
+            if let first = results.first {
+                ClipboardService.copyFile(first.fileURL)
+            }
+
+            inputText = ""
+            let skipped = entries.count - results.count
+            statusMessage = skipped > 0
+                ? "Downloaded \(results.count) of \(entries.count) videos (\(skipped) skipped)."
+                : "Downloaded \(results.count) videos."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+
+        playlistDownloadStatus = nil
+        isDownloading = false
+        downloadProgress = 0
+    }
+
+    /// Shared entry point for any link that might hold several items — a Pinterest
+    /// pin/Idea Pin/board, or an Instagram profile. A single item behaves like any
+    /// other link; several items show a choice of how to save them before downloading.
+    private func beginCollectionSelection(_ sourceURL: String, source: CollectionSource, capItems: Bool) async {
         resolutionPrompt = nil
         conversionPrompt = nil
-        pinterestDownloadPrompt = nil
+        collectionDownloadPrompt = nil
         isProbing = true
+        probingMessage = "Checking the \(source.displayName) link…"
         statusMessage = "Checking the link..."
 
         do {
-            let result = try await downloader.probePinterestCollection(sourceURL: sourceURL)
+            let result = try await downloader.probeCollection(sourceURL: sourceURL, capItems: capItems)
             isProbing = false
 
             guard !result.items.isEmpty else {
@@ -507,7 +616,7 @@ final class AppModel: ObservableObject {
             }
 
             guard result.items.count > 1 else {
-                // Exactly one item: behave just like any other single-pin link.
+                // Exactly one item: behave just like any other single-item link.
                 let item = result.items[0]
                 if item.isImage, let imageURL = item.imageURL {
                     pendingRemotePageURL = sourceURL
@@ -529,9 +638,10 @@ final class AppModel: ObservableObject {
             // Multiple items: let the user choose zip vs. separate files, and a format
             // for the images, before downloading anything.
             statusMessage = nil
-            pinterestDownloadPrompt = PinterestDownloadPrompt(
+            collectionDownloadPrompt = CollectionDownloadPrompt(
+                source: source,
                 sourceURL: sourceURL,
-                title: result.title ?? "Pinterest",
+                title: result.title ?? source.displayName,
                 items: result.items
             )
         } catch {
@@ -540,13 +650,14 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Called when the user confirms their choice on the Pinterest save-options card.
-    func choosePinterestSaveMode(_ mode: PinterestSaveMode, imageFormat: ImageFormat?, quality: Int) {
-        guard let prompt = pinterestDownloadPrompt else { return }
-        pinterestDownloadPrompt = nil
+    /// Called when the user confirms their choice on the save-options card.
+    func chooseCollectionSaveMode(_ mode: CollectionSaveMode, imageFormat: ImageFormat?, quality: Int) {
+        guard let prompt = collectionDownloadPrompt else { return }
+        collectionDownloadPrompt = nil
         Task { [weak self] in
-            await self?.performPinterestBundleDownload(
+            await self?.performCollectionBundleDownload(
                 prompt.items,
+                source: prompt.source,
                 title: prompt.title,
                 sourceURL: prompt.sourceURL,
                 saveMode: mode,
@@ -556,45 +667,54 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Dismisses the Pinterest save-options card without downloading.
-    func cancelPinterestSelection() {
-        pinterestDownloadPrompt = nil
+    /// Dismisses the save-options card without downloading.
+    func cancelCollectionSelection() {
+        collectionDownloadPrompt = nil
     }
 
-    private func performPinterestBundleDownload(
-        _ items: [PinterestCollectionItem],
+    private func performCollectionBundleDownload(
+        _ items: [CollectionItem],
+        source: CollectionSource,
         title: String,
         sourceURL: String,
-        saveMode: PinterestSaveMode,
+        saveMode: CollectionSaveMode,
         imageFormat: ImageFormat?,
         quality: Int
     ) async {
         guard !isDownloading else { return }
         isDownloading = true
         downloadProgress = 0
-        pinterestBundleStatus = PinterestBundleStatus(phase: .downloading, completed: 0, total: items.count, title: title, saveMode: saveMode)
+        collectionBundleStatus = CollectionBundleStatus(source: source, phase: .downloading, completed: 0, total: items.count, title: title, saveMode: saveMode, currentItemTitle: nil)
 
         do {
-            var (files, workingDirectory) = try await downloader.downloadPinterestItems(items) { [weak self] completed, total in
-                Task { @MainActor in
-                    guard let self else { return }
-                    self.downloadProgress = Double(completed) / Double(total)
-                    self.pinterestBundleStatus = PinterestBundleStatus(phase: .downloading, completed: completed, total: total, title: title, saveMode: saveMode)
+            var (files, workingDirectory) = try await downloader.downloadCollectionItems(
+                items,
+                onItemStart: { [weak self] index, total, itemTitle in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.collectionBundleStatus = CollectionBundleStatus(source: source, phase: .downloading, completed: index, total: total, title: title, saveMode: saveMode, currentItemTitle: itemTitle)
+                    }
+                },
+                onItemFinish: { [weak self] completed, total in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.downloadProgress = Double(completed) / Double(total)
+                    }
                 }
-            }
+            )
 
             // Convert images to the chosen format, if the user picked one other than "Original".
             if let imageFormat {
-                pinterestBundleStatus = PinterestBundleStatus(phase: .converting, completed: 0, total: files.count, title: title, saveMode: saveMode)
+                collectionBundleStatus = CollectionBundleStatus(source: source, phase: .converting, completed: 0, total: files.count, title: title, saveMode: saveMode, currentItemTitle: nil)
                 files = await convertImages(in: files, to: imageFormat, quality: quality, workingDirectory: workingDirectory)
             }
 
-            pinterestBundleStatus = PinterestBundleStatus(phase: .finishing, completed: items.count, total: items.count, title: title, saveMode: saveMode)
+            collectionBundleStatus = CollectionBundleStatus(source: source, phase: .finishing, completed: items.count, total: items.count, title: title, saveMode: saveMode, currentItemTitle: nil)
 
             switch saveMode {
             case .zip:
                 let zipBaseName = MediaDownloaderService.imageBaseName(title: title, index: 0, total: 1)
-                let zipDestination = uniquePinterestZipURL(baseName: zipBaseName)
+                let zipDestination = uniqueCollectionZipURL(baseName: zipBaseName)
                 let savedZip = try await zipper.zip(files: files, to: zipDestination)
 
                 // Use the actual saved filename (which may have a "-2"/"-3" suffix if a
@@ -614,7 +734,7 @@ final class AppModel: ObservableObject {
                 ClipboardService.copyFile(savedZip)
 
             case .individual:
-                await insertPinterestIndividualHistory(files, sourceURL: sourceURL)
+                await insertCollectionIndividualHistory(files, sourceURL: sourceURL)
             }
 
             try? FileManager.default.removeItem(at: workingDirectory)
@@ -630,7 +750,7 @@ final class AppModel: ObservableObject {
             statusMessage = error.localizedDescription
         }
 
-        pinterestBundleStatus = nil
+        collectionBundleStatus = nil
         isDownloading = false
         downloadProgress = 0
     }
@@ -663,9 +783,9 @@ final class AppModel: ObservableObject {
         return result
     }
 
-    /// Saves each file from a Pinterest collection into the download folder as its own
-    /// history entry, instead of bundling them into a zip.
-    private func insertPinterestIndividualHistory(_ files: [URL], sourceURL: String) async {
+    /// Saves each file from a collection into the download folder as its own history
+    /// entry, instead of bundling them into a zip.
+    private func insertCollectionIndividualHistory(_ files: [URL], sourceURL: String) async {
         guard !files.isEmpty else { return }
         var savedURLs: [URL] = []
 
@@ -706,7 +826,7 @@ final class AppModel: ObservableObject {
         return candidate
     }
 
-    private func uniquePinterestZipURL(baseName: String) -> URL {
+    private func uniqueCollectionZipURL(baseName: String) -> URL {
         let folder = preferences.downloadFolder
         var candidate = folder.appendingPathComponent(baseName).appendingPathExtension("zip")
         var counter = 2
@@ -773,16 +893,24 @@ final class AppModel: ObservableObject {
 
         isDownloading = true
         downloadProgress = 0
-        statusMessage = "Downloading..."
+        // No percentage yet while yt-dlp resolves the link — say so, rather than leaving
+        // the spinner unexplained; this gets replaced by a live percentage below.
+        statusMessage = "Preparing download…"
 
         do {
+            var lastShownPercent = -1
             let result = try await downloader.download(
                 sourceURL: sourceURL,
                 destinationFolder: preferences.downloadFolder,
                 formatSelector: formatSelector
             ) { [weak self] progress in
                 Task { @MainActor in
-                    self?.downloadProgress = progress
+                    guard let self else { return }
+                    self.downloadProgress = progress
+                    let percent = Int((progress * 100).rounded())
+                    guard percent != lastShownPercent else { return }
+                    lastShownPercent = percent
+                    self.statusMessage = percent >= 99 ? "Almost done…" : "Downloading… \(percent)%"
                 }
             }
             let thumbnailPath = try? await thumbnailGenerator.thumbnailPath(for: result.fileURL)

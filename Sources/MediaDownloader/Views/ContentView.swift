@@ -46,16 +46,26 @@ struct ContentView: View {
                 .blur(radius: inputAppeared ? 0 : 7)
 
                 if model.isProbing {
-                    ProbingCard()
+                    ProbingCard(message: model.probingMessage)
                         .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
-                } else if let bundleStatus = model.pinterestBundleStatus {
-                    PinterestBundleProgressView(status: bundleStatus)
+                } else if let bundleStatus = model.collectionBundleStatus {
+                    CollectionBundleProgressView(status: bundleStatus)
                         .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
-                } else if let pinterestPrompt = model.pinterestDownloadPrompt {
-                    PinterestOptionsPickerView(
-                        prompt: pinterestPrompt,
-                        onConfirm: model.choosePinterestSaveMode,
-                        onCancel: model.cancelPinterestSelection
+                } else if let playlistStatus = model.playlistDownloadStatus {
+                    PlaylistBundleProgressView(status: playlistStatus)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                } else if let collectionPrompt = model.collectionDownloadPrompt {
+                    CollectionOptionsPickerView(
+                        prompt: collectionPrompt,
+                        onConfirm: model.chooseCollectionSaveMode,
+                        onCancel: model.cancelCollectionSelection
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                } else if let playlistPrompt = model.playlistDownloadPrompt {
+                    PlaylistOptionsPickerView(
+                        prompt: playlistPrompt,
+                        onConfirm: model.choosePlaylistDownload,
+                        onCancel: model.cancelPlaylistSelection
                     )
                     .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
                 } else if let prompt = model.resolutionPrompt {
@@ -171,8 +181,10 @@ struct ContentView: View {
         .animation(.easeOut(duration: 0.2), value: model.isProbing)
         .animation(.easeOut(duration: 0.2), value: model.resolutionPrompt)
         .animation(.easeOut(duration: 0.2), value: model.conversionPrompt)
-        .animation(.easeOut(duration: 0.2), value: model.pinterestBundleStatus)
-        .animation(.easeOut(duration: 0.2), value: model.pinterestDownloadPrompt)
+        .animation(.easeOut(duration: 0.2), value: model.collectionBundleStatus)
+        .animation(.easeOut(duration: 0.2), value: model.collectionDownloadPrompt)
+        .animation(.easeOut(duration: 0.2), value: model.playlistDownloadStatus)
+        .animation(.easeOut(duration: 0.2), value: model.playlistDownloadPrompt)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: model.statusMessage)
     }
 

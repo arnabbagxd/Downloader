@@ -29,6 +29,15 @@ struct DownloadInputView: View {
             .frame(height: 36)
 
             if isDownloading {
+                Text(progress < 0.001 ? "Preparing…" : "\(Int((progress * 100).rounded()))%")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                    .contentTransition(.numericText())
+                    .animation(.easeOut(duration: 0.15), value: progress)
+                    .transition(.opacity)
+
                 CircularDownloadIndicator(progress: progress)
                     .frame(width: 30, height: 30)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))

@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// Shown while a Pinterest board/Idea Pin is being downloaded and saved — this can take
-/// a while (several items in sequence), so it makes the activity impossible to miss.
-struct PinterestBundleProgressView: View {
-    let status: PinterestBundleStatus
+/// Shown while a multi-item collection (Pinterest board/Idea Pin, or an Instagram
+/// profile) is being downloaded and saved — this can take a while (several items in
+/// sequence), so it makes the activity impossible to miss and shows what's happening now.
+struct CollectionBundleProgressView: View {
+    let status: CollectionBundleStatus
 
     private var title: String {
         switch status.phase {
@@ -15,7 +16,12 @@ struct PinterestBundleProgressView: View {
 
     private var subtitle: String {
         switch status.phase {
-        case .downloading: return "Downloading \(status.completed) of \(status.total) items…"
+        case .downloading:
+            let position = "Downloading \(status.completed) of \(status.total) items"
+            guard let currentItemTitle = status.currentItemTitle, !currentItemTitle.isEmpty else {
+                return "\(position)…"
+            }
+            return "\(position): \(currentItemTitle)"
         case .converting: return "Converting \(status.total) images…"
         case .finishing: return status.saveMode == .zip ? "Packing \(status.total) items…" : "Saving \(status.total) items…"
         }
@@ -40,6 +46,8 @@ struct PinterestBundleProgressView: View {
                     Text(subtitle)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
 
                 Spacer(minLength: 0)

@@ -94,13 +94,17 @@ private struct QualityBox: View {
     }
 }
 
-/// Placeholder card shown while the app is fetching a video's available resolutions.
+/// Placeholder card shown while the app is checking a link — what it says changes
+/// depending on what's being checked (a playlist, an Instagram profile, a Pinterest
+/// board, or just a video's available resolutions), so it's always clear what's happening.
 struct ProbingCard: View {
+    var message = "Finding available resolutions…"
+
     var body: some View {
         HStack(spacing: 12) {
             ProgressView()
                 .controlSize(.small)
-            Text("Finding available resolutions…")
+            Text(message)
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)
         }
