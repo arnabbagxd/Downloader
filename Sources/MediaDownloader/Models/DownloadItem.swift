@@ -42,6 +42,11 @@ struct DownloadItem: Identifiable, Codable, Hashable {
         return ["jpg", "jpeg", "png", "webp", "gif", "heic", "bmp", "tiff", "avif"].contains(ext)
     }
 
+    /// True for a bundled .zip, e.g. everything from a Pinterest board/Idea Pin.
+    var isZipFile: Bool {
+        URL(fileURLWithPath: filePath).pathExtension.lowercased() == "zip"
+    }
+
     var sourceName: String {
         guard let host = URLComponents(string: sourceURL)?.host else {
             return "Web"
