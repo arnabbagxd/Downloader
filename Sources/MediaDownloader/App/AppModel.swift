@@ -1012,21 +1012,50 @@ final class AppModel: ObservableObject {
         case .updateAvailable(let update):
             let alert = NSAlert()
             alert.messageText = "A new version is available"
-            let instructions = "Click Update to open the installer, then drag Download It "
-                + "into Applications to replace the current version (\(currentVersion))."
             alert.informativeText = downloadedUpdate == nil
-                ? "Download It \(update.version) is out. \(instructions)"
-                : "Download It \(update.version) has already been downloaded. \(instructions)"
+                // The download itself failed — fall back to sending the user to the release page.
+                ? "Download It \(update.version) is out, but it couldn't be downloaded automatically. "
+                    + "Click Update to open the release page and install it yourself."
+                : "Download It \(update.version) is ready to install, replacing \(currentVersion)."
             alert.icon = NSImage(named: NSImage.applicationIconName)
             alert.addButton(withTitle: "Update")
             alert.addButton(withTitle: "Later")
 
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+            guard let downloadedUpdate else {
+                NSWorkspace.shared.open(update.downloadURL ?? update.releaseURL)
+                return
+            }
+
+            Task { [weak self] in
+                await self?.installUpdate(downloadedUpdate)
+            }
+        }
+    }
+
+    /// Installs an already-downloaded update in place and relaunches. On failure, falls
+    /// back to just opening the downloaded file so the user can finish it manually.
+    private func installUpdate(_ downloadedUpdate: DownloadedUpdate) async {
+        isCheckingForUpdates = true
+        statusMessage = "Installing update…"
+
+        do {
+            try await AppUpdateInstaller.installAndRelaunch(from: downloadedUpdate.fileURL)
+            // installAndRelaunch terminates this process on success; nothing runs after this.
+        } catch {
+            isCheckingForUpdates = false
+            statusMessage = nil
+
+            let alert = NSAlert()
+            alert.messageText = "Couldn't install the update automatically"
+            alert.informativeText = "\(error.localizedDescription) You can finish installing it yourself instead."
+            alert.icon = NSImage(named: NSImage.applicationIconName)
+            alert.addButton(withTitle: "Open Installer")
+            alert.addButton(withTitle: "Cancel")
+
             if alert.runModal() == .alertFirstButtonReturn {
-                if let downloadedUpdate {
-                    NSWorkspace.shared.open(downloadedUpdate.fileURL)
-                } else {
-                    NSWorkspace.shared.open(update.downloadURL ?? update.releaseURL)
-                }
+                NSWorkspace.shared.open(downloadedUpdate.fileURL)
             }
         }
     }
