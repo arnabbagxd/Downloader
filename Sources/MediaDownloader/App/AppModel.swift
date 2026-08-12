@@ -34,6 +34,7 @@ final class AppModel: ObservableObject {
     private let historyStore = HistoryStore()
     private let downloader = MediaDownloaderService()
     private let imageConverter = ImageConversionService()
+    private let pdfConverter = PDFConversionService()
     private let zipper = ZipService()
     private var pendingRemotePageURL: String?
     private let thumbnailGenerator = ThumbnailGenerator()
@@ -140,6 +141,38 @@ final class AppModel: ObservableObject {
         )
     }
 
+    /// Handles a PDF dropped onto the window — rasterizes every page, then shows the same
+    /// format picker used for images so the pages can be saved as jpg/png/webp/avif.
+    func handleDroppedPDF(_ url: URL) {
+        pasteTask?.cancel()
+        resolutionPrompt = nil
+        conversionPrompt = nil
+        pendingRemotePageURL = nil
+
+        Task { [weak self] in
+            await self?.beginPDFConversion(url)
+        }
+    }
+
+    private func beginPDFConversion(_ pdfURL: URL) async {
+        isProbing = true
+        probingMessage = "Reading \(pdfURL.lastPathComponent)…"
+
+        do {
+            let pageURLs = try await pdfConverter.rasterizePages(of: pdfURL)
+            isProbing = false
+            let baseName = pdfURL.deletingPathExtension().lastPathComponent
+            conversionPrompt = ConversionPrompt(
+                source: .localFiles(pageURLs),
+                title: pageURLs.count > 1 ? "\(baseName) — \(pageURLs.count) pages" : baseName,
+                allowsOriginal: false
+            )
+        } catch {
+            isProbing = false
+            statusMessage = error.localizedDescription
+        }
+    }
+
     /// Called when the user taps a format box. `format == nil` means keep the original (remote only).
     func chooseConversionFormat(_ format: ImageFormat?, quality: Int) {
         guard let prompt = conversionPrompt else { return }
@@ -182,6 +215,11 @@ final class AppModel: ObservableObject {
                     destinationFolder: preferences.downloadFolder
                 )
                 savedURLs.append(output)
+                // Pages rasterized from a dropped PDF live under the system temp
+                // directory — clean them up now that they've been converted.
+                if url.path.hasPrefix(FileManager.default.temporaryDirectory.path) {
+                    try? FileManager.default.removeItem(at: url)
+                }
             }
             insertImageHistory(savedURLs, sourceURL: urls.first?.absoluteString ?? "")
             statusMessage = savedURLs.count > 1
@@ -840,6 +878,26 @@ final class AppModel: ObservableObject {
     private static let imageExtensions: Set<String> = [
         "jpg", "jpeg", "png", "webp", "gif", "heic", "bmp", "tiff", "avif"
     ]
+
+    /// Classifies local files — dropped onto the window, or pasted from the clipboard —
+    /// as images, a PDF, or neither, and routes them to the right conversion flow.
+    /// Returns `false` when none of the files matched, so the caller can fall back to
+    /// treating the input as ordinary pasted/dropped text instead.
+    @discardableResult
+    func handleDroppedFiles(_ urls: [URL]) -> Bool {
+        let imageFiles = urls.filter { Self.imageExtensions.contains($0.pathExtension.lowercased()) }
+        if !imageFiles.isEmpty {
+            handleDroppedImageFiles(imageFiles)
+            return true
+        }
+
+        if let pdfFile = urls.first(where: { $0.pathExtension.lowercased() == "pdf" }) {
+            handleDroppedPDF(pdfFile)
+            return true
+        }
+
+        return false
+    }
 
     private func performImageDownload(_ imageURLs: [String], title: String?, sourceURL: String) async {
         guard !isDownloading else { return }

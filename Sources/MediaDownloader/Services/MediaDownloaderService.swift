@@ -38,7 +38,10 @@ actor MediaDownloaderService {
             // Download in parallel pieces for a real throughput boost on fragmented sources.
             "--concurrent-fragments", "4",
             "--merge-output-format", "mp4",
-            "--recode-video", "mp4",
+            // Remux into an mp4 container (fast stream copy) instead of forcing a full
+            // re-encode; combined with the -S sort below, the source is almost always
+            // already h264/aac, so this just repackages it instead of re-encoding it.
+            "--remux-video", "mp4",
             "-S", "vcodec:h264,acodec:aac,ext:mp4:m4a",
             "--ffmpeg-location", ffmpeg
         ]
@@ -406,7 +409,7 @@ actor MediaDownloaderService {
         _ = try await runProcess(executable: ytDlp, arguments: [
             "--no-playlist", "--restrict-filenames",
             "--merge-output-format", "mp4",
-            "--recode-video", "mp4",
+            "--remux-video", "mp4",
             "-S", "vcodec:h264,acodec:aac,ext:mp4:m4a",
             "--ffmpeg-location", ffmpeg,
             "-f", "bv*[height<=?1080]+ba/b[height<=?1080]",

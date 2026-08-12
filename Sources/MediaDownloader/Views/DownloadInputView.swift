@@ -8,6 +8,7 @@ struct DownloadInputView: View {
     let folderName: String
     let onSubmit: () -> Void
     let onPaste: () -> Void
+    let onPasteFiles: ([URL]) -> Bool
     let onChooseFolder: () -> Void
     let onClearHistory: () -> Void
     let onOpenSettings: () -> Void
@@ -24,20 +25,12 @@ struct DownloadInputView: View {
                 placeholder: "Paste a video or image link — Instagram, X, YouTube…",
                 onSubmit: onSubmit,
                 onPaste: onPaste,
+                onPasteFiles: onPasteFiles,
                 onTab: onFocusHistory
             )
             .frame(height: 36)
 
             if isDownloading {
-                Text(progress < 0.001 ? "Preparing…" : "\(Int((progress * 100).rounded()))%")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .fixedSize()
-                    .contentTransition(.numericText())
-                    .animation(.easeOut(duration: 0.15), value: progress)
-                    .transition(.opacity)
-
                 CircularDownloadIndicator(progress: progress)
                     .frame(width: 30, height: 30)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
@@ -125,6 +118,8 @@ private final class InputMenuActionTarget: NSObject {
     }
 }
 
+/// A "buffering" circle: an empty ring while the download is starting, that fills in
+/// like a pie chart — no percentage text, just how much of the circle is colored in.
 private struct CircularDownloadIndicator: View {
     let progress: Double
     @State private var rotation: Double = 0
@@ -146,19 +141,10 @@ private struct CircularDownloadIndicator: View {
                     )
                     .rotationEffect(.degrees(rotation))
             } else {
-                Circle()
-                    .trim(from: 0, to: max(0.02, progress))
-                    .stroke(
-                        Color.appAccent,
-                        style: StrokeStyle(lineWidth: 2.6, lineCap: .round)
-                    )
-                    .rotationEffect(.degrees(-90))
+                PieSlice(progress: progress)
+                    .fill(Color.appAccent)
+                    .padding(4)
                     .animation(.easeOut(duration: 0.25), value: progress)
-
-                Text("\(Int((progress * 100).rounded()))")
-                    .font(.system(size: 9, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.primary.opacity(0.85))
-                    .monospacedDigit()
             }
         }
         .padding(3)
@@ -167,5 +153,34 @@ private struct CircularDownloadIndicator: View {
                 rotation = 360
             }
         }
+    }
+}
+
+/// A filled pie-chart wedge growing clockwise from the top, from 0% (empty) to 100%
+/// (a full circle) — the "how much of the circle is colored in" fill the ring uses.
+private struct PieSlice: Shape {
+    var progress: Double
+
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let radius = min(rect.width, rect.height) / 2
+        let clampedProgress = min(max(progress, 0), 1)
+
+        var path = Path()
+        path.move(to: center)
+        path.addArc(
+            center: center,
+            radius: radius,
+            startAngle: .degrees(-90),
+            endAngle: .degrees(-90 + 360 * clampedProgress),
+            clockwise: false
+        )
+        path.closeSubpath()
+        return path
     }
 }

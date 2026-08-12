@@ -37,6 +37,7 @@ struct ContentView: View {
                     folderName: URL(fileURLWithPath: model.downloadFolderPath).lastPathComponent,
                     onSubmit: model.submitInput,
                     onPaste: model.handlePasteCandidate,
+                    onPasteFiles: model.handleDroppedFiles,
                     onChooseFolder: model.chooseDownloadFolder,
                     onClearHistory: model.clearHistory,
                     onOpenSettings: model.showSettings,
@@ -188,18 +189,14 @@ struct ContentView: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: model.statusMessage)
     }
 
-    private static let imageFileExtensions: Set<String> = [
-        "jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "bmp", "tiff", "tif", "avif"
-    ]
-
     private func handleDroppedURLs(_ urls: [URL]) {
-        let imageFiles = urls.filter {
-            $0.isFileURL && Self.imageFileExtensions.contains($0.pathExtension.lowercased())
+        let fileURLs = urls.filter(\.isFileURL)
+
+        if model.handleDroppedFiles(fileURLs) {
+            return
         }
 
-        if !imageFiles.isEmpty {
-            model.handleDroppedImageFiles(imageFiles)
-        } else if let webURL = urls.first(where: { !$0.isFileURL }) {
+        if let webURL = urls.first(where: { !$0.isFileURL }) {
             model.handleDroppedText(webURL.absoluteString)
         }
     }
@@ -538,7 +535,7 @@ private struct DropHighlightOverlay: View {
                 .padding(18)
 
             Label {
-                Text("Drop a link to download, or images to convert")
+                Text("Drop a link to download, or images/a PDF to convert")
             } icon: {
                 LucideIcon(name: "download", size: 18)
             }
@@ -578,12 +575,12 @@ private struct FileDropView: NSViewRepresentable {
 
         override init(frame frameRect: NSRect) {
             super.init(frame: frameRect)
-            registerForDraggedTypes([.fileURL, .URL, .string])
+            registerForDraggedTypes([.fileURL, .URL, .string, .pdf, .tiff, .png])
         }
 
         required init?(coder: NSCoder) {
             super.init(coder: coder)
-            registerForDraggedTypes([.fileURL, .URL, .string])
+            registerForDraggedTypes([.fileURL, .URL, .string, .pdf, .tiff, .png])
         }
 
         // Bottom layer of the ZStack: interactive SwiftUI controls sit on top and receive
@@ -621,9 +618,33 @@ private struct FileDropView: NSViewRepresentable {
                 urls = [url]
             }
 
+            // Some drag sources (e.g. a page thumbnail dragged out of Preview.app, or an
+            // image dragged straight off a web page) hand over raw file data instead of a
+            // file:// URL — write it to a temp file so it flows through like any other drop.
+            if urls.isEmpty, let tempFileURL = Self.writeRawPasteboardDataToTempFile(pasteboard) {
+                urls = [tempFileURL]
+            }
+
             guard !urls.isEmpty else { return false }
             onDropURLs(urls)
             return true
+        }
+
+        private static func writeRawPasteboardDataToTempFile(_ pasteboard: NSPasteboard) -> URL? {
+            let candidates: [(NSPasteboard.PasteboardType, String)] = [
+                (.pdf, "pdf"), (.png, "png"), (.tiff, "tiff")
+            ]
+
+            for (type, fileExtension) in candidates {
+                guard let data = pasteboard.data(forType: type) else { continue }
+                let destination = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathExtension(fileExtension)
+                guard (try? data.write(to: destination)) != nil else { continue }
+                return destination
+            }
+
+            return nil
         }
     }
 }

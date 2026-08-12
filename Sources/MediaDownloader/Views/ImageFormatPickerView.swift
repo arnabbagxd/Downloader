@@ -51,7 +51,7 @@ struct ImageFormatPickerView: View {
                         .monospacedDigit()
                         .frame(width: 44, alignment: .trailing)
                 }
-                Text("Applies to JPG & WebP — PNG is always lossless.")
+                Text("Applies to JPG, WebP & AVIF — PNG is always lossless.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }

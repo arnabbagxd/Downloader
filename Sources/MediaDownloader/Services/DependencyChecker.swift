@@ -32,6 +32,10 @@ enum DependencyChecker {
     static var processEnvironment: [String: String] {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = searchDirectories.joined(separator: ":")
+        // yt-dlp is Python-based and block-buffers stdout when it isn't a real terminal
+        // (i.e. when we pipe it), so progress lines would otherwise all arrive in one
+        // burst right as the process exits instead of streaming live.
+        environment["PYTHONUNBUFFERED"] = "1"
         return environment
     }
 
