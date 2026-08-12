@@ -1,13 +1,14 @@
 import SwiftUI
 
-/// Lets the user choose how to save a multi-item Pinterest board/Idea Pin: zip vs.
-/// separate files, plus a target format (and quality) for any images inside it.
-struct PinterestOptionsPickerView: View {
-    let prompt: PinterestDownloadPrompt
-    let onConfirm: (PinterestSaveMode, ImageFormat?, Int) -> Void
+/// Lets the user choose how to save a multi-item collection (Pinterest board/Idea Pin,
+/// or an Instagram profile): zip vs. separate files, plus a target format (and quality)
+/// for any images inside it.
+struct CollectionOptionsPickerView: View {
+    let prompt: CollectionDownloadPrompt
+    let onConfirm: (CollectionSaveMode, ImageFormat?, Int) -> Void
     let onCancel: () -> Void
 
-    @State private var saveMode: PinterestSaveMode = .zip
+    @State private var saveMode: CollectionSaveMode = .zip
     @State private var imageFormat: ImageFormat? = nil // nil == keep original
     @State private var quality: Double = 80
 
@@ -26,7 +27,7 @@ struct PinterestOptionsPickerView: View {
                         .font(.system(size: 16, weight: .semibold))
                         .lineLimit(1)
                         .truncationMode(.tail)
-                    Text("\(prompt.items.count) items found — \(countSummary)")
+                    Text("\(prompt.source.displayName) — \(prompt.items.count) items found — \(countSummary)")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
@@ -50,7 +51,7 @@ struct PinterestOptionsPickerView: View {
                     .foregroundStyle(.secondary)
 
                 HStack(spacing: 10) {
-                    ForEach(PinterestSaveMode.allCases) { mode in
+                    ForEach(CollectionSaveMode.allCases) { mode in
                         ChoiceBox(
                             title: mode.displayName,
                             subtitle: mode.subtitle,

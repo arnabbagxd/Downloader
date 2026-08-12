@@ -6,6 +6,10 @@ struct PasteAwareTextField: NSViewRepresentable {
     let placeholder: String
     let onSubmit: () -> Void
     let onPaste: () -> Void
+    /// Called instead of `onPaste` when the clipboard holds one or more local files
+    /// (e.g. a PDF or image copied in Finder) rather than plain text. Returns whether
+    /// any of the files were something this app knows how to handle.
+    let onPasteFiles: ([URL]) -> Bool
     let onTab: () -> Void
 
     func makeNSView(context: Context) -> PastingTextField {
@@ -23,6 +27,7 @@ struct PasteAwareTextField: NSViewRepresentable {
         textField.lineBreakMode = .byTruncatingMiddle
         textField.usesSingleLineMode = true
         textField.onPaste = onPaste
+        textField.onPasteFiles = onPasteFiles
 
         DispatchQueue.main.async {
             textField.window?.makeFirstResponder(textField)
@@ -37,6 +42,7 @@ struct PasteAwareTextField: NSViewRepresentable {
         }
 
         nsView.onPaste = onPaste
+        nsView.onPasteFiles = onPasteFiles
         nsView.setAdaptivePlaceholder(placeholder)
     }
 
@@ -78,6 +84,7 @@ struct PasteAwareTextField: NSViewRepresentable {
 
 final class PastingTextField: NSTextField {
     var onPaste: (() -> Void)?
+    var onPasteFiles: (([URL]) -> Bool)?
     private var adaptivePlaceholder = ""
 
     override var acceptsFirstResponder: Bool {
@@ -129,6 +136,18 @@ final class PastingTextField: NSTextField {
 
         guard isPasteShortcut else {
             return super.performKeyEquivalent(with: event)
+        }
+
+        // A file copied in Finder (e.g. a PDF or image) has no plain-text representation
+        // to paste into the field — hand it to the file-conversion flow instead of
+        // silently doing nothing.
+        let fileURLs = (NSPasteboard.general.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL]) ?? []
+
+        if !fileURLs.isEmpty, onPasteFiles?(fileURLs) == true {
+            return true
         }
 
         if let editor = currentEditor() {

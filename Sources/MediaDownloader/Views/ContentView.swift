@@ -37,6 +37,7 @@ struct ContentView: View {
                     folderName: URL(fileURLWithPath: model.downloadFolderPath).lastPathComponent,
                     onSubmit: model.submitInput,
                     onPaste: model.handlePasteCandidate,
+                    onPasteFiles: model.handleDroppedFiles,
                     onChooseFolder: model.chooseDownloadFolder,
                     onClearHistory: model.clearHistory,
                     onOpenSettings: model.showSettings,
@@ -46,16 +47,26 @@ struct ContentView: View {
                 .blur(radius: inputAppeared ? 0 : 7)
 
                 if model.isProbing {
-                    ProbingCard()
+                    ProbingCard(message: model.probingMessage)
                         .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
-                } else if let bundleStatus = model.pinterestBundleStatus {
-                    PinterestBundleProgressView(status: bundleStatus)
+                } else if let bundleStatus = model.collectionBundleStatus {
+                    CollectionBundleProgressView(status: bundleStatus)
                         .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
-                } else if let pinterestPrompt = model.pinterestDownloadPrompt {
-                    PinterestOptionsPickerView(
-                        prompt: pinterestPrompt,
-                        onConfirm: model.choosePinterestSaveMode,
-                        onCancel: model.cancelPinterestSelection
+                } else if let playlistStatus = model.playlistDownloadStatus {
+                    PlaylistBundleProgressView(status: playlistStatus)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                } else if let collectionPrompt = model.collectionDownloadPrompt {
+                    CollectionOptionsPickerView(
+                        prompt: collectionPrompt,
+                        onConfirm: model.chooseCollectionSaveMode,
+                        onCancel: model.cancelCollectionSelection
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                } else if let playlistPrompt = model.playlistDownloadPrompt {
+                    PlaylistOptionsPickerView(
+                        prompt: playlistPrompt,
+                        onConfirm: model.choosePlaylistDownload,
+                        onCancel: model.cancelPlaylistSelection
                     )
                     .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
                 } else if let prompt = model.resolutionPrompt {
@@ -171,23 +182,21 @@ struct ContentView: View {
         .animation(.easeOut(duration: 0.2), value: model.isProbing)
         .animation(.easeOut(duration: 0.2), value: model.resolutionPrompt)
         .animation(.easeOut(duration: 0.2), value: model.conversionPrompt)
-        .animation(.easeOut(duration: 0.2), value: model.pinterestBundleStatus)
-        .animation(.easeOut(duration: 0.2), value: model.pinterestDownloadPrompt)
+        .animation(.easeOut(duration: 0.2), value: model.collectionBundleStatus)
+        .animation(.easeOut(duration: 0.2), value: model.collectionDownloadPrompt)
+        .animation(.easeOut(duration: 0.2), value: model.playlistDownloadStatus)
+        .animation(.easeOut(duration: 0.2), value: model.playlistDownloadPrompt)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: model.statusMessage)
     }
 
-    private static let imageFileExtensions: Set<String> = [
-        "jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "bmp", "tiff", "tif", "avif"
-    ]
-
     private func handleDroppedURLs(_ urls: [URL]) {
-        let imageFiles = urls.filter {
-            $0.isFileURL && Self.imageFileExtensions.contains($0.pathExtension.lowercased())
+        let fileURLs = urls.filter(\.isFileURL)
+
+        if model.handleDroppedFiles(fileURLs) {
+            return
         }
 
-        if !imageFiles.isEmpty {
-            model.handleDroppedImageFiles(imageFiles)
-        } else if let webURL = urls.first(where: { !$0.isFileURL }) {
+        if let webURL = urls.first(where: { !$0.isFileURL }) {
             model.handleDroppedText(webURL.absoluteString)
         }
     }
@@ -526,7 +535,7 @@ private struct DropHighlightOverlay: View {
                 .padding(18)
 
             Label {
-                Text("Drop a link to download, or images to convert")
+                Text("Drop a link to download, or images/a PDF to convert")
             } icon: {
                 LucideIcon(name: "download", size: 18)
             }
@@ -566,12 +575,12 @@ private struct FileDropView: NSViewRepresentable {
 
         override init(frame frameRect: NSRect) {
             super.init(frame: frameRect)
-            registerForDraggedTypes([.fileURL, .URL, .string])
+            registerForDraggedTypes([.fileURL, .URL, .string, .pdf, .tiff, .png])
         }
 
         required init?(coder: NSCoder) {
             super.init(coder: coder)
-            registerForDraggedTypes([.fileURL, .URL, .string])
+            registerForDraggedTypes([.fileURL, .URL, .string, .pdf, .tiff, .png])
         }
 
         // Bottom layer of the ZStack: interactive SwiftUI controls sit on top and receive
@@ -609,9 +618,33 @@ private struct FileDropView: NSViewRepresentable {
                 urls = [url]
             }
 
+            // Some drag sources (e.g. a page thumbnail dragged out of Preview.app, or an
+            // image dragged straight off a web page) hand over raw file data instead of a
+            // file:// URL — write it to a temp file so it flows through like any other drop.
+            if urls.isEmpty, let tempFileURL = Self.writeRawPasteboardDataToTempFile(pasteboard) {
+                urls = [tempFileURL]
+            }
+
             guard !urls.isEmpty else { return false }
             onDropURLs(urls)
             return true
+        }
+
+        private static func writeRawPasteboardDataToTempFile(_ pasteboard: NSPasteboard) -> URL? {
+            let candidates: [(NSPasteboard.PasteboardType, String)] = [
+                (.pdf, "pdf"), (.png, "png"), (.tiff, "tiff")
+            ]
+
+            for (type, fileExtension) in candidates {
+                guard let data = pasteboard.data(forType: type) else { continue }
+                let destination = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathExtension(fileExtension)
+                guard (try? data.write(to: destination)) != nil else { continue }
+                return destination
+            }
+
+            return nil
         }
     }
 }

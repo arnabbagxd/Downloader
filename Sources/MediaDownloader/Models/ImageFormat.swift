@@ -5,6 +5,7 @@ enum ImageFormat: String, CaseIterable, Identifiable {
     case jpg
     case png
     case webp
+    case avif
 
     var id: String { rawValue }
 
@@ -13,6 +14,7 @@ enum ImageFormat: String, CaseIterable, Identifiable {
         case .jpg: return "JPG"
         case .png: return "PNG"
         case .webp: return "WebP"
+        case .avif: return "AVIF"
         }
     }
 
@@ -21,7 +23,7 @@ enum ImageFormat: String, CaseIterable, Identifiable {
     /// Lossy formats respect the quality slider; PNG is lossless.
     var isLossy: Bool {
         switch self {
-        case .jpg, .webp: return true
+        case .jpg, .webp, .avif: return true
         case .png: return false
         }
     }
@@ -31,6 +33,7 @@ enum ImageFormat: String, CaseIterable, Identifiable {
         case .jpg: return "Small, universal"
         case .png: return "Lossless"
         case .webp: return "Smallest"
+        case .avif: return "Modern, tiny"
         }
     }
 
@@ -48,6 +51,10 @@ enum ImageFormat: String, CaseIterable, Identifiable {
         case .png:
             // Lossless; just squeeze the file a bit. Quality slider is ignored.
             return ["-compression_level", "9"]
+        case .avif:
+            // libaom-av1 crf is 0 (best) … 63 (worst); map 100→0, 0→63.
+            let crf = Int((Double(100 - clampedQuality) / 100.0 * 63.0).rounded())
+            return ["-c:v", "libaom-av1", "-crf", "\(crf)", "-b:v", "0", "-pix_fmt", "yuv420p"]
         }
     }
 }

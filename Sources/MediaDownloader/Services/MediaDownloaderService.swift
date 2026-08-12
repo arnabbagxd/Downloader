@@ -38,7 +38,10 @@ actor MediaDownloaderService {
             // Download in parallel pieces for a real throughput boost on fragmented sources.
             "--concurrent-fragments", "4",
             "--merge-output-format", "mp4",
-            "--recode-video", "mp4",
+            // Remux into an mp4 container (fast stream copy) instead of forcing a full
+            // re-encode; combined with the -S sort below, the source is almost always
+            // already h264/aac, so this just repackages it instead of re-encoding it.
+            "--remux-video", "mp4",
             "-S", "vcodec:h264,acodec:aac,ext:mp4:m4a",
             "--ffmpeg-location", ffmpeg
         ]
@@ -167,38 +170,135 @@ actor MediaDownloaderService {
         return results
     }
 
+    /// A playlist or channel URL can contain hundreds/thousands of videos; cap extraction
+    /// so a probe stays fast and a bulk download stays bounded.
+    static let maxPlaylistItems = 50
+
+    /// Cheap heuristic to avoid running an extra yt-dlp lookup on every plain video link:
+    /// only URLs that look like a playlist/channel/user page trigger the flat-playlist probe.
+    static func mightBePlaylistOrChannel(_ sourceURL: String) -> Bool {
+        guard let url = URL(string: sourceURL) else { return false }
+        let path = url.path.lowercased()
+        let query = url.query?.lowercased() ?? ""
+
+        if query.contains("list=") { return true }
+        let markers = ["/playlist", "/playlists", "/channel/", "/c/", "/user/", "/videos", "/uploads", "/@"]
+        return markers.contains { path.contains($0) }
+    }
+
+    /// Probes a link that might be a playlist or channel using `--flat-playlist`, which is
+    /// fast because it doesn't resolve formats for every entry. Returns `nil` when the link
+    /// turns out to be a single video, so the caller can fall back to the normal flow.
+    func probePlaylist(sourceURL: String) async throws -> PlaylistProbeResult? {
+        guard let ytDlp = ToolManager.ytDlpPath else { throw MediaDownloaderError.missingTool("yt-dlp") }
+
+        let output = try await runProcess(executable: ytDlp, arguments: [
+            "--flat-playlist", "--no-warnings", "--ignore-no-formats-error",
+            "--playlist-items", "1-\(Self.maxPlaylistItems)",
+            "-J", sourceURL
+        ])
+
+        guard let data = output.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        guard (json["_type"] as? String) == "playlist",
+              let rawEntries = json["entries"] as? [[String: Any]],
+              rawEntries.count > 1 else {
+            return nil
+        }
+
+        let rawTitle = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = (rawTitle?.isEmpty == false) ? rawTitle : nil
+
+        let entries: [PlaylistEntry] = rawEntries.compactMap { entry in
+            guard let id = entry["id"] as? String else { return nil }
+            let webpageURL = (entry["url"] as? String) ?? (entry["webpage_url"] as? String) ?? id
+            let rawEntryTitle = (entry["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return PlaylistEntry(id: id, webpageURL: webpageURL, title: (rawEntryTitle?.isEmpty == false) ? rawEntryTitle : nil)
+        }
+
+        guard entries.count > 1 else { return nil }
+        return PlaylistProbeResult(title: title, entries: entries)
+    }
+
+    /// Downloads every entry in a playlist/channel into the destination folder, one at a
+    /// time. A single failed item is skipped rather than aborting the whole batch.
+    func downloadPlaylistItems(
+        _ entries: [PlaylistEntry],
+        destinationFolder: URL,
+        formatSelector: String?,
+        onItemStart: (@Sendable (Int, Int, String?) -> Void)? = nil
+    ) async throws -> [DownloadResult] {
+        var results: [DownloadResult] = []
+
+        for (index, entry) in entries.enumerated() {
+            onItemStart?(index, entries.count, entry.title)
+            if let result = try? await download(
+                sourceURL: entry.webpageURL,
+                destinationFolder: destinationFolder,
+                formatSelector: formatSelector
+            ) {
+                results.append(result)
+            }
+        }
+
+        guard !results.isEmpty else {
+            throw MediaDownloaderError.missingOutputFile
+        }
+
+        return results
+    }
+
     /// Board/profile links can contain hundreds of pins; cap extraction so it stays bounded.
-    static let maxPinterestCollectionItems = 30
+    static let maxCollectionItems = 30
 
     static func isPinterestLink(_ sourceURL: String) -> Bool {
         guard let host = URL(string: sourceURL)?.host?.lowercased() else { return false }
         return host.contains("pinterest.") || host == "pin.it" || host.hasSuffix(".pin.it")
     }
 
-    /// Probes a Pinterest pin, Idea Pin, or board for every video/image it contains.
-    /// A single pin returns one item; a multi-page Idea Pin or a board returns several.
-    func probePinterestCollection(sourceURL: String) async throws -> PinterestCollectionResult {
+    /// True for a full Instagram profile link (e.g. instagram.com/someuser) as opposed to
+    /// a single post, reel, story, or one of Instagram's other non-profile paths.
+    static func isInstagramProfileLink(_ sourceURL: String) -> Bool {
+        guard let url = URL(string: sourceURL), let host = url.host?.lowercased() else { return false }
+        guard host == "instagram.com" || host.hasSuffix(".instagram.com") else { return false }
+
+        let segments = url.path.split(separator: "/").map(String.init)
+        guard segments.count == 1 else { return false }
+
+        let reservedPaths: Set<String> = [
+            "p", "reel", "reels", "tv", "stories", "explore", "accounts",
+            "direct", "direct_v2", "about", "developer", "legal", "web"
+        ]
+        return !reservedPaths.contains(segments[0].lowercased())
+    }
+
+    /// Probes a Pinterest pin/Idea Pin/board or an Instagram profile for every video/image
+    /// it contains. A single pin returns one item; a board, Idea Pin, or profile returns
+    /// several. `capItems` bounds how many entries are fetched (always applied for
+    /// profiles/boards, which can hold hundreds of posts).
+    func probeCollection(sourceURL: String, capItems: Bool) async throws -> CollectionProbeResult {
         guard let ytDlp = ToolManager.ytDlpPath else { throw MediaDownloaderError.missingTool("yt-dlp") }
 
         var arguments = ["--no-warnings", "--ignore-no-formats-error", "-J"]
-        // A board/profile URL (no "/pin/" segment) can contain hundreds of pins; a single
-        // pin or Idea Pin URL is unaffected by this cap.
-        if !sourceURL.contains("/pin/") {
-            arguments += ["--playlist-items", "1-\(Self.maxPinterestCollectionItems)"]
+        if capItems {
+            arguments += ["--playlist-items", "1-\(Self.maxCollectionItems)"]
         }
         arguments.append(sourceURL)
 
         let output = try await runProcess(executable: ytDlp, arguments: arguments)
         guard let data = output.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return PinterestCollectionResult(title: nil, items: [])
+            return CollectionProbeResult(title: nil, items: [])
         }
 
         let rawOverallTitle = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let overallTitle = (rawOverallTitle?.isEmpty == false) ? rawOverallTitle : nil
 
         let rawEntries = (json["entries"] as? [Any]) ?? [json]
-        var items: [PinterestCollectionItem] = []
+        var items: [CollectionItem] = []
 
         for case let entry as [String: Any] in rawEntries {
             var heights = Set<Int>()
@@ -224,7 +324,7 @@ actor MediaDownloaderService {
             let webpageURL = (entry["webpage_url"] as? String) ?? sourceURL
             let rawTitle = (entry["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
 
-            items.append(PinterestCollectionItem(
+            items.append(CollectionItem(
                 webpageURL: webpageURL,
                 title: (rawTitle?.isEmpty == false) ? rawTitle : nil,
                 heights: heights.sorted(by: >),
@@ -232,15 +332,17 @@ actor MediaDownloaderService {
             ))
         }
 
-        return PinterestCollectionResult(title: overallTitle, items: items)
+        return CollectionProbeResult(title: overallTitle, items: items)
     }
 
-    /// Downloads every item in a Pinterest collection into a fresh temporary folder.
-    /// Returns the saved files plus that folder, so the caller can clean it up once
-    /// it's done with them (e.g. after zipping). One failed item doesn't stop the rest.
-    func downloadPinterestItems(
-        _ items: [PinterestCollectionItem],
-        onProgress: (@Sendable (Int, Int) -> Void)? = nil
+    /// Downloads every item in a collection (Pinterest board/Idea Pin, or Instagram
+    /// profile) into a fresh temporary folder. Returns the saved files plus that folder,
+    /// so the caller can clean it up once it's done with them (e.g. after zipping). One
+    /// failed item doesn't stop the rest.
+    func downloadCollectionItems(
+        _ items: [CollectionItem],
+        onItemStart: (@Sendable (Int, Int, String?) -> Void)? = nil,
+        onItemFinish: (@Sendable (Int, Int) -> Void)? = nil
     ) async throws -> (files: [URL], directory: URL) {
         guard let ytDlp = ToolManager.ytDlpPath else { throw MediaDownloaderError.missingTool("yt-dlp") }
         guard let ffmpeg = ToolManager.ffmpegPath else { throw MediaDownloaderError.missingTool("ffmpeg") }
@@ -252,17 +354,19 @@ actor MediaDownloaderService {
         let total = items.count
 
         for (index, item) in items.enumerated() {
+            onItemStart?(index, total, item.title)
+
             if item.isImage, let imageURLString = item.imageURL, let imageURL = URL(string: imageURLString) {
-                if let saved = try? await downloadPinterestImage(imageURL, title: item.title, index: index, total: total, into: workingDirectory) {
+                if let saved = try? await downloadCollectionImage(imageURL, title: item.title, index: index, total: total, into: workingDirectory) {
                     savedFiles.append(saved)
                 }
             } else if !item.heights.isEmpty {
-                if let saved = try? await downloadPinterestVideo(item, ytDlp: ytDlp, ffmpeg: ffmpeg, index: index, total: total, into: workingDirectory) {
+                if let saved = try? await downloadCollectionVideo(item, ytDlp: ytDlp, ffmpeg: ffmpeg, index: index, total: total, into: workingDirectory) {
                     savedFiles.append(saved)
                 }
             }
 
-            onProgress?(index + 1, total)
+            onItemFinish?(index + 1, total)
         }
 
         guard !savedFiles.isEmpty else {
@@ -273,7 +377,7 @@ actor MediaDownloaderService {
         return (savedFiles, workingDirectory)
     }
 
-    private func downloadPinterestImage(
+    private func downloadCollectionImage(
         _ imageURL: URL,
         title: String?,
         index: Int,
@@ -290,8 +394,8 @@ actor MediaDownloaderService {
         return destination
     }
 
-    private func downloadPinterestVideo(
-        _ item: PinterestCollectionItem,
+    private func downloadCollectionVideo(
+        _ item: CollectionItem,
         ytDlp: String,
         ffmpeg: String,
         index: Int,
@@ -305,7 +409,7 @@ actor MediaDownloaderService {
         _ = try await runProcess(executable: ytDlp, arguments: [
             "--no-playlist", "--restrict-filenames",
             "--merge-output-format", "mp4",
-            "--recode-video", "mp4",
+            "--remux-video", "mp4",
             "-S", "vcodec:h264,acodec:aac,ext:mp4:m4a",
             "--ffmpeg-location", ffmpeg,
             "-f", "bv*[height<=?1080]+ba/b[height<=?1080]",
