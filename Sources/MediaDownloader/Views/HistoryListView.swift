@@ -62,7 +62,13 @@ struct HistoryListView: View {
         }
         .frame(width: 680)
         .frame(height: panelHeight)
-
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(.white.opacity(0.16), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.16), radius: 24, x: 0, y: 14)
     }
 
     private var panelHeight: CGFloat {

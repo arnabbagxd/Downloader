@@ -29,8 +29,6 @@ struct HistoryRowView: View {
         .frame(height: 74)
     }
 
-    private var fileExists: Bool { FileManager.default.fileExists(atPath: item.filePath) }
-
     private var rowContent: some View {
         HStack(spacing: 14) {
             ThumbnailView(path: item.thumbnailPath, isZip: item.isZipFile)
@@ -43,7 +41,7 @@ struct HistoryRowView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
 
-                Text(fileExists ? "\(URL(fileURLWithPath: item.filePath).pathExtension.uppercased()) · \(item.sourceName)" : "File moved or removed")
+                Text(item.sourceName)
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -52,20 +50,17 @@ struct HistoryRowView: View {
             Spacer(minLength: 14)
 
             HStack(spacing: 4) {
-                IconButton(iconName: item.isImageFile ? "image" : item.isZipFile ? "folder" : "scissors", help: item.isImageFile ? "Open image" : item.isZipFile ? "Show in Finder" : "Edit trim", action: onEdit)
-                    .disabled(!fileExists)
+                IconButton(iconName: "scissors", help: "Edit trim", action: onEdit)
                 IconButton(
                     iconName: copySucceeded ? "check" : "copy",
                     help: "Copy file",
                     tint: copySucceeded ? .appAccent : .secondary,
                     action: copyFile
                 )
-                .disabled(!fileExists)
                 MoreIconButton(
                     onReveal: onReveal,
                     onOpenSource: onOpenSource,
-                    onDelete: onDelete,
-                    fileExists: fileExists
+                    onDelete: onDelete
                 )
             }
             .opacity(isKeyboardSelected ? 1 : 0.72)
@@ -78,8 +73,8 @@ struct HistoryRowView: View {
         }
         .contentShape(Rectangle())
         // Clicking anywhere on the row reopens the video panel (buttons keep their own actions).
-        .onTapGesture { if fileExists { onEdit() } }
-
+        .onTapGesture(perform: onEdit)
+        .scaleEffect(isHovering && !suppressHoverHighlight && dragOffset == 0 ? 1.012 : 1)
         .onHover {
             isHovering = $0
             onHoverChange($0)
@@ -135,7 +130,6 @@ private struct MoreIconButton: View {
     let onReveal: () -> Void
     let onOpenSource: () -> Void
     let onDelete: () -> Void
-    var fileExists: Bool = true
     @State private var isHovering = false
 
     var body: some View {
@@ -162,12 +156,10 @@ private struct MoreIconButton: View {
 
         let menu = NSMenu()
         menu.autoenablesItems = false
-        let reveal = actionItem(title: "Show in Finder", iconName: "folder", action: onReveal)
-        reveal.isEnabled = fileExists
-        menu.addItem(reveal)
+        menu.addItem(actionItem(title: "Open in Finder", iconName: "folder", action: onReveal))
         menu.addItem(actionItem(title: "Open Link", iconName: "external-link", action: onOpenSource))
         menu.addItem(.separator())
-        menu.addItem(actionItem(title: "Remove from History", iconName: "trash-2", action: onDelete))
+        menu.addItem(actionItem(title: "Delete", iconName: "trash-2", action: onDelete))
 
         let pointInWindow = NSPoint(
             x: NSEvent.mouseLocation.x - contentView.window!.frame.minX,
