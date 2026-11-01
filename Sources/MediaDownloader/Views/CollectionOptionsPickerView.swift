@@ -10,7 +10,7 @@ struct CollectionOptionsPickerView: View {
 
     @State private var saveMode: CollectionSaveMode = .zip
     @State private var imageFormat: ImageFormat? = nil // nil == keep original
-    @State private var quality: Double = 80
+    @State private var quality: Double = 90
 
     private var countSummary: String {
         var parts: [String] = []
