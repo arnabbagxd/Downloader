@@ -31,10 +31,19 @@ struct ContentView: View {
             .frame(width: 0, height: 0)
 
             ScrollView {
-            VStack(spacing: 12) {
+            VStack(spacing: 22) {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.title2).foregroundStyle(Color.appAccent)
+                    Text("Download It").font(.headline)
+                    Spacer()
+                    Button(action: model.showSettings) { Image(systemName: "gearshape") }
+                        .buttonStyle(.borderless).help("Settings").accessibilityLabel("Settings")
+                }
+
                 DownloadInputView(
                     text: $model.inputText,
-                    isDownloading: model.isDownloading,
+                    isDownloading: model.isBusy,
                     progress: model.downloadProgress,
                     folderName: URL(fileURLWithPath: model.downloadFolderPath).lastPathComponent,
                     onSubmit: model.submitInput,
@@ -48,18 +57,19 @@ struct ContentView: View {
                 .opacity(inputAppeared ? 1 : 0)
                 .blur(radius: inputAppeared ? 0 : 7)
 
-                HStack {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder").foregroundStyle(.secondary)
+                    Text("Save to").foregroundStyle(.secondary)
                     Button(action: model.revealDownloadFolder) {
-                        Label(model.downloadFolderPath, systemImage: "folder").lineLimit(1).truncationMode(.middle)
-                    }.help("Open destination folder")
-                    Button("Change…", action: model.chooseDownloadFolder).disabled(model.isBusy)
+                        Text(URL(fileURLWithPath: model.downloadFolderPath).lastPathComponent).lineLimit(1)
+                    }.buttonStyle(.link).help(model.downloadFolderPath)
+                    Button(action: model.chooseDownloadFolder) { Image(systemName: "chevron.down") }
+                        .buttonStyle(.borderless).help("Change download folder")
+                        .accessibilityLabel("Change download folder").disabled(model.isBusy)
                     Spacer()
-                    Button("Library", action: model.showLibrary)
-                    if !model.removedHistory.isEmpty { Button("Undo Removal", action: model.undoHistoryRemoval) }
-                    if model.canCancel { Button(model.isCancelling ? "Cancelling…" : "Cancel", action: model.cancelActivity).disabled(model.isCancelling) }
-                }.font(.caption).frame(width: 640)
-                    .padding(.horizontal, 20).padding(.vertical, 10)
-                    .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+                    if model.canCancel { Button(model.isCancelling ? "Cancelling…" : "Cancel Task", action: model.cancelActivity).disabled(model.isCancelling) }
+                }.font(.callout)
+                Divider()
 
                 if model.isProbing {
                     ProbingCard(message: model.probingMessage)
@@ -116,6 +126,17 @@ struct ContentView: View {
                     .offset(y: trimAppeared ? 0 : -8)
                 }
 
+                HStack {
+                    Text("Recent Files").font(.headline)
+                    Spacer()
+                    if !model.removedHistory.isEmpty { Button("Undo Removal", action: model.undoHistoryRemoval) }
+                    Button("Show All Files", action: model.showLibrary).buttonStyle(.link)
+                    Menu {
+                        Button("Remove All from History", action: model.clearHistory)
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .accessibilityLabel("History actions")
+                }
                 if model.history.isEmpty {
                     if displayedTrimSession == nil {
                         EmptyHistoryView()
@@ -144,9 +165,12 @@ struct ContentView: View {
                     .offset(y: historyAppeared ? 0 : -8)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(.top, 56)
-            .padding(.bottom, 56)
+            .frame(width: 680)
+            .padding(24)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 28))
+            .overlay { RoundedRectangle(cornerRadius: 28).strokeBorder(Color.primary.opacity(0.08), lineWidth: 1) }
+            .shadow(color: .black.opacity(0.15), radius: 28, y: 14)
+            .padding(.vertical, 40)
             }
 
             DropHighlightOverlay(isActive: isDropTargeted)

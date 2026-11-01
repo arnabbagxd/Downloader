@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct DownloadInputView: View {
     @Binding var text: String
@@ -14,103 +15,60 @@ struct DownloadInputView: View {
     let onOpenSettings: () -> Void
     let onFocusHistory: () -> Void
 
+    @State private var clipboardFeedback: String?
+
     var body: some View {
-        HStack(spacing: 12) {
-            LucideIcon(name: "link", size: 18)
-                .foregroundStyle(Color.primary.opacity(0.4))
-
-            PasteAwareTextField(
-                text: $text,
-                placeholder: "Paste a video or image link — Instagram, X, YouTube…",
-                onSubmit: onSubmit,
-                onPaste: onPaste,
-                onPasteFiles: onPasteFiles,
-                onTab: onFocusHistory
-            )
-            .frame(height: 36)
-
-            if isDownloading {
-                CircularDownloadIndicator(progress: progress)
-                    .frame(width: 30, height: 30)
-                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Download or convert").font(.title2.weight(.semibold))
+            Text("Paste a media link, or add images and PDFs to convert.")
+                .font(.callout).foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                Image(systemName: "link").foregroundStyle(.secondary).accessibilityHidden(true)
+                PasteAwareTextField(
+                    text: $text,
+                    placeholder: "Paste a video or image link",
+                    onSubmit: onSubmit,
+                    onPaste: onPaste,
+                    onPasteFiles: onPasteFiles,
+                    onTab: onFocusHistory
+                ).frame(height: 32).disabled(isDownloading)
+                if isDownloading {
+                    ProgressView(value: progress > 0 ? progress : nil).frame(width: 28)
+                } else {
+                    Button(action: onSubmit) { Image(systemName: "arrow.right") }
+                        .buttonStyle(.borderedProminent).buttonBorderShape(.circle)
+                        .disabled(!URLValidator.looksLikeWebURL(text))
+                        .help("Review download options").accessibilityLabel("Review download options")
+                }
             }
-
-            InputSettingsButton(
-                folderName: folderName,
-                onChooseFolder: onChooseFolder,
-                onClearHistory: onClearHistory,
-                onOpenSettings: onOpenSettings
-            )
-        }
-        .padding(.leading, 20)
-        .padding(.trailing, 12)
-        .frame(width: 680, height: 64)
-        .background(.ultraThinMaterial, in: Capsule(style: .continuous))
-        .overlay {
-            Capsule(style: .continuous)
-                .strokeBorder(.white.opacity(0.16), lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.22), radius: 28, x: 0, y: 18)
-    }
-}
-
-private struct InputSettingsButton: View {
-    let folderName: String
-    let onChooseFolder: () -> Void
-    let onClearHistory: () -> Void
-    let onOpenSettings: () -> Void
-
-    var body: some View {
-        Button(action: showMenu) {
-            LucideIcon(name: "settings", size: 17)
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(Color.primary.opacity(0.58))
-        .help("Settings · Download folder: \(folderName)")
-        .accessibilityLabel("Settings and download folder")
+            .padding(12).nativeGlass(radius: 16)
+            HStack(spacing: 10) {
+                Button {
+                    if let link = NSPasteboard.general.string(forType: .string), URLValidator.looksLikeWebURL(link) {
+                        clipboardFeedback = nil
+                        text = link
+                        onPaste()
+                    } else {
+                        clipboardFeedback = "Copy a web link first, then choose Paste Link."
+                    }
+                } label: { Label("Paste Link", systemImage: "doc.on.clipboard") }
+                Button(action: addFiles) { Label("Add Files…", systemImage: "plus") }
+                Spacer()
+                Text("You choose options before saving.").font(.caption).foregroundStyle(.secondary)
+            }.controlSize(.large).disabled(isDownloading)
+            if let clipboardFeedback {
+                Text(clipboardFeedback).font(.callout).foregroundStyle(.secondary)
+            }
+        }.frame(width: 680, alignment: .leading)
     }
 
-    private func showMenu() {
-        guard let contentView = NSApp.keyWindow?.contentView else {
-            return
-        }
-
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        menu.addItem(actionItem(title: "Settings", iconName: "settings", action: onOpenSettings))
-        menu.addItem(actionItem(title: "Change Folder", iconName: "folder", action: onChooseFolder))
-        menu.addItem(.separator())
-        menu.addItem(actionItem(title: "Remove All from History", iconName: "trash-2", action: onClearHistory))
-
-        let pointInWindow = NSPoint(
-            x: NSEvent.mouseLocation.x - contentView.window!.frame.minX,
-            y: NSEvent.mouseLocation.y - contentView.window!.frame.minY
-        )
-        let pointInView = contentView.convert(pointInWindow, from: nil)
-        menu.popUp(positioning: nil, at: pointInView, in: contentView)
-    }
-
-    private func actionItem(title: String, iconName: String, action: @escaping () -> Void) -> NSMenuItem {
-        let target = InputMenuActionTarget(action)
-        let item = NSMenuItem(title: title, action: #selector(InputMenuActionTarget.performAction), keyEquivalent: "")
-        item.target = target
-        item.representedObject = target
-        item.image = LucideIconStore.menuImage(iconName)
-        return item
-    }
-}
-
-private final class InputMenuActionTarget: NSObject {
-    private let action: () -> Void
-
-    init(_ action: @escaping () -> Void) {
-        self.action = action
-    }
-
-    @objc func performAction() {
-        action()
+    private func addFiles() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.image, .pdf]
+        panel.prompt = "Add Files"
+        if panel.runModal() == .OK { _ = onPasteFiles(panel.urls) }
     }
 }
 
