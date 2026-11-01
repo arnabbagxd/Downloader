@@ -8,6 +8,9 @@ final class MenuBarController: NSObject {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let popover = NSPopover()
     private var observation: AnyCancellable?
+    private var accessibilityObservation: AnyCancellable?
+    private var loadingTimer: Timer?
+    private var loadingStartedAt: TimeInterval = 0
     var isShowingPopover: Bool { popover.isShown }
 
     init(model: AppModel, onOpenApp: @escaping () -> Void) {
@@ -40,8 +43,15 @@ final class MenuBarController: NSObject {
         observation = model.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { self?.refresh() }
         }
+        accessibilityObservation = NSWorkspace.shared.notificationCenter
+            .publisher(for: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async { self?.refresh() }
+            }
         refresh()
     }
+
+    deinit { loadingTimer?.invalidate() }
 
     func showActivity() {
         if !popover.isShown { togglePopover() }
@@ -61,10 +71,13 @@ final class MenuBarController: NSObject {
     private func refresh() {
         guard let button = statusItem.button else { return }
         let busy = model.isBusy || model.isRefiningResolutions
+        let loading = busy && model.activityProgress == nil
+        updateLoadingAnimation(isLoading: loading)
         let failed = !busy && model.activity?.state == .failed
         let symbol = failed ? "exclamationmark.circle" : busy ? "arrow.triangle.2.circlepath" : "arrow.down.circle"
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         button.image?.isTemplate = true
+        if loading { drawLoadingFrame() }
         var progressText = ""
         if let fraction = model.activityProgress, busy {
             button.image = Self.progressImage(fraction: fraction)
@@ -82,7 +95,31 @@ final class MenuBarController: NSObject {
         button.setAccessibilityLabel("Download It. \(detail)\(progressText)")
     }
 
-    private static func progressImage(fraction: Double) -> NSImage {
+    private func updateLoadingAnimation(isLoading: Bool) {
+        let shouldAnimate = isLoading && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        guard shouldAnimate else {
+            loadingTimer?.invalidate()
+            loadingTimer = nil
+            return
+        }
+        guard loadingTimer == nil else { return }
+        loadingStartedAt = ProcessInfo.processInfo.systemUptime
+        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.drawLoadingFrame() }
+        }
+        // Keep spinning while the activity popover or a menu is open.
+        RunLoop.main.add(timer, forMode: .common)
+        loadingTimer = timer
+    }
+
+    private func drawLoadingFrame() {
+        guard (model.isBusy || model.isRefiningResolutions), model.activityProgress == nil else { return }
+        let elapsed = ProcessInfo.processInfo.systemUptime - loadingStartedAt
+        let angle = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : elapsed.truncatingRemainder(dividingBy: 1) * 360
+        statusItem.button?.image = Self.progressImage(fraction: 0.25, rotation: angle)
+    }
+
+    private static func progressImage(fraction: Double, rotation: Double = 0) -> NSImage {
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
             let rect = NSRect(x: 2, y: 2, width: 14, height: 14)
             NSColor.labelColor.withAlphaComponent(0.25).setStroke()
@@ -94,7 +131,7 @@ final class MenuBarController: NSObject {
             arc.lineWidth = 2
             arc.lineCapStyle = .round
             arc.appendArc(withCenter: NSPoint(x: 9, y: 9), radius: 7,
-                          startAngle: 90, endAngle: 90 - CGFloat(min(max(fraction, 0), 1)) * 360,
+                          startAngle: 90 - rotation, endAngle: 90 - rotation - CGFloat(min(max(fraction, 0), 1)) * 360,
                           clockwise: true)
             arc.stroke()
             return true
