@@ -8,6 +8,7 @@ struct MenuBarActivityView: View {
     let onOpenLibrary: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var clipboardFeedback: String?
+    @State private var revealedRecentID: UUID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -54,6 +55,11 @@ struct MenuBarActivityView: View {
             HStack {
                 Text("Recent Files").font(.headline)
                 Spacer()
+                if !model.removedHistory.isEmpty {
+                    Button("Undo") {
+                        withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) { model.undoHistoryRemoval() }
+                    }.buttonStyle(.borderless).help("Restore removed history")
+                }
                 Button(action: model.revealDownloadFolder) { Image(systemName: "folder") }
                     .buttonStyle(.borderless).help("Open download folder")
                     .accessibilityLabel("Open download folder")
@@ -63,7 +69,13 @@ struct MenuBarActivityView: View {
                     .font(.callout).foregroundStyle(.secondary)
             } else {
                 ForEach(Array(model.history.prefix(3))) { item in
-                    recentFile(item)
+                    SwipeToRemoveRow(id: item.id, revealedID: $revealedRecentID, onRemove: {
+                        withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) {
+                            model.deleteHistoryItem(item)
+                            revealedRecentID = nil
+                        }
+                    }) { recentFile(item) }
+                    .transition(reduceMotion ? .identity : .asymmetric(insertion: .opacity, removal: .move(edge: .leading).combined(with: .opacity)))
                 }
             }
             Button(action: onOpenLibrary) {
