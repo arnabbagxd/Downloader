@@ -68,6 +68,7 @@ struct VideoProbe: Equatable {
     let title: String?
     let heights: [Int]
     let imageURLs: [String]
+    var thumbnailURL: String? = nil
 
     var isImagePost: Bool {
         heights.isEmpty && !imageURLs.isEmpty
@@ -79,6 +80,7 @@ struct ResolutionPrompt: Equatable {
     let sourceURL: String
     let title: String?
     let options: [VideoResolution]
+    var thumbnailURL: String? = nil
 
     /// What to show as the card's subtitle: the video title, falling back to the link.
     var subtitle: String {

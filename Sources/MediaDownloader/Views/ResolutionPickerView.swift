@@ -7,6 +7,9 @@ struct ResolutionPickerView: View {
     let onSelect: (VideoResolution) -> Void
     let onCancel: () -> Void
 
+    @AppStorage("preferredVideoHeight") private var preferredHeight = -1
+    @State private var selected: VideoResolution?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
@@ -40,11 +43,28 @@ struct ResolutionPickerView: View {
                 .help("Cancel")
             }
 
+            if let thumbnail = prompt.thumbnailURL, let url = URL(string: thumbnail) { MediaPreview(url: url) }
             HStack(spacing: 10) {
                 ForEach(prompt.options) { option in
-                    QualityBox(resolution: option) { onSelect(option) }
+                    QualityBox(resolution: option) { selected = option }
+                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(selected == option ? Color.accentColor : .clear, lineWidth: 2))
+                        .accessibilityAddTraits(selected == option ? .isSelected : [])
                 }
             }
+            HStack {
+                Text(selected.map { "Selected: \($0.label)" } ?? "Choose a quality above")
+                    .font(.callout).foregroundStyle(.secondary)
+                Spacer()
+                Button("Download") {
+                    if let selected { preferredHeight = selected.id; onSelect(selected) }
+                }
+                .buttonStyle(.borderedProminent).disabled(selected == nil)
+                .keyboardShortcut(.return, modifiers: [])
+            }
+        }
+        .onAppear { selected = prompt.options.first { $0.id == preferredHeight } ?? prompt.options.first }
+        .onChange(of: prompt.options) { _, options in
+            if !options.contains(where: { $0 == selected }) { selected = options.first }
         }
         .padding(20)
         .frame(width: 680)

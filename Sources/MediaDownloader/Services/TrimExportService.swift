@@ -34,15 +34,23 @@ actor TrimExportService {
 
         let arguments = Self.exportArguments(sourceURL: sourceURL, selection: selection, outputURL: outputURL)
 
-        try await runProcess(executable: ffmpeg, arguments: arguments)
+        do {
+            try await MediaConversionProcess.run(executable: ffmpeg, arguments: arguments)
+        } catch {
+            try? fileManager.removeItem(at: outputURL)
+            throw TrimExportError.processFailed(error.localizedDescription)
+        }
         return outputURL
     }
 
     nonisolated static func exportArguments(sourceURL: URL, selection: TrimSelection, outputURL: URL) -> [String] {
         [
             "-y",
-            "-i", sourceURL.path,
+            "-hide_banner", "-loglevel", "error", "-nostdin",
+            // Input seeking skips to the preceding keyframe; accurate_seek (the
+            // default when re-encoding) decodes/discards only the short lead-in.
             "-ss", formatTime(selection.start),
+            "-i", sourceURL.path,
             "-t", formatTime(selection.end - selection.start),
             "-map", "0:v:0",
             "-map", "0:a?",
@@ -81,34 +89,4 @@ actor TrimExportService {
         String(format: "%.3f", seconds)
     }
 
-    private func runProcess(executable: String, arguments: [String]) async throws {
-        try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            let stdout = Pipe()
-            let stderr = Pipe()
-
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = arguments
-            process.environment = DependencyChecker.processEnvironment
-            process.standardOutput = stdout
-            process.standardError = stderr
-
-            process.terminationHandler = { process in
-                let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
-                let error = String(data: errorData, encoding: .utf8) ?? ""
-
-                if process.terminationStatus == 0 {
-                    continuation.resume()
-                } else {
-                    continuation.resume(throwing: TrimExportError.processFailed(error))
-                }
-            }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
-    }
 }

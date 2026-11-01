@@ -1,9 +1,36 @@
 import AppKit
 import Foundation
+import SwiftUI
+import UserNotifications
 
 @MainActor
 final class AppModel: ObservableObject {
     @Published var inputText = ""
+    @Published private(set) var activity: AppActivity? {
+        didSet {
+            guard let activity, !activity.isRunning else { return }
+            if let data = try? JSONEncoder().encode(activity) { defaults.set(data, forKey: "lastActivity") }
+        }
+    }
+    @Published private(set) var transferDetail: String?
+    @Published var notificationsEnabled: Bool
+
+    func setNotifications(_ enabled: Bool) {
+        notificationsEnabled = enabled
+        defaults.set(enabled, forKey: "completionNotifications")
+        if enabled {
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        }
+    }
+
+    private func notifyCompletion(_ result: AppActivity) {
+        guard notificationsEnabled, Bundle.main.bundleIdentifier != nil else { return }
+        let content = UNMutableNotificationContent()
+        content.title = result.state == .succeeded ? "Download It — Finished" : "Download It — Needs attention"
+        content.body = result.detail
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+    @Published private(set) var isExportingTrim = false
     @Published private(set) var history: [DownloadItem] = []
     @Published private(set) var isDownloading = false
     @Published private(set) var downloadProgress: Double = 0
@@ -30,8 +57,9 @@ final class AppModel: ObservableObject {
     @Published var playlistDownloadPrompt: PlaylistDownloadPrompt?
     @Published private(set) var playlistDownloadStatus: PlaylistDownloadStatus?
 
-    private let preferences = PreferencesStore()
-    private let historyStore = HistoryStore()
+    private let defaults: UserDefaults
+    private let preferences: PreferencesStore
+    private let historyStore: HistoryStore
     private let downloader = MediaDownloaderService()
     private let imageConverter = ImageConversionService()
     private let pdfConverter = PDFConversionService()
@@ -40,19 +68,128 @@ final class AppModel: ObservableObject {
     private let thumbnailGenerator = ThumbnailGenerator()
     private let trimExporter = TrimExportService()
     private let updateChecker = UpdateChecker()
+    private var trimTask: Task<URL, Error>?
+    private var pdfWorkingDirectory: URL?
+    private var jobTask: Task<Void, Never>?
+    private var retryAction: (() -> Void)?
+    @Published private(set) var isCancelling = false
+    @Published private(set) var canRetry = false
+    @Published private(set) var removedHistory: [DownloadItem] = []
     private var pasteTask: Task<Void, Never>?
     private var probeTask: Task<Void, Never>?
     private var statusMessageDismissTask: Task<Void, Never>?
     private var probeCache: [String: VideoProbe] = [:]
     private var didRunAutomaticUpdateCheck = false
+    private var libraryWindow: NSWindow?
     private var settingsWindowController: SettingsWindowController?
 
     var downloadFolderPath: String {
         preferences.downloadFolder.path
     }
 
-    init() {
+    init(historyStore: HistoryStore = HistoryStore(), defaults: UserDefaults = .standard) {
+        self.historyStore = historyStore
+        self.defaults = defaults
+        self.preferences = PreferencesStore(defaults: defaults)
+        self.notificationsEnabled = defaults.bool(forKey: "completionNotifications")
         history = historyStore.load()
+        if let data = defaults.data(forKey: "lastActivity") {
+            activity = try? JSONDecoder().decode(AppActivity.self, from: data)
+        }
+    }
+
+    var isBusy: Bool { isDownloading || isProbing || isExportingTrim }
+
+    /// Only expose progress backed by completed work; encoders without progress
+    /// remain indeterminate rather than showing an invented percentage.
+    var activityProgress: Double? {
+        guard activity?.isRunning == true else { return nil }
+        if let collectionBundleStatus {
+            return collectionBundleStatus.phase == .downloading ? collectionBundleStatus.fraction : nil
+        }
+        if let playlistDownloadStatus { return playlistDownloadStatus.fraction }
+        return downloadProgress > 0 ? min(downloadProgress, 1) : nil
+    }
+
+    var activityDetail: String {
+        if let collectionBundleStatus {
+            switch collectionBundleStatus.phase {
+            case .downloading:
+                return "Downloading item \(min(collectionBundleStatus.completed + 1, collectionBundleStatus.total)) of \(collectionBundleStatus.total)"
+            case .converting: return "Converting images…"
+            case .finishing: return "Saving files…"
+            }
+        }
+        if let playlistDownloadStatus {
+            return "Downloading video \(min(playlistDownloadStatus.completed + 1, playlistDownloadStatus.total)) of \(playlistDownloadStatus.total)"
+        }
+        return activity?.detail ?? "Paste a link or drop a file to get started."
+    }
+
+    private func beginActivity(title: String, detail: String) {
+        transferDetail = nil
+        isCancelling = false
+        canRetry = false
+        activity = AppActivity(title: title, detail: detail)
+    }
+
+    private func finishActivity(message: String? = nil) {
+        guard var result = activity, result.isRunning else { return }
+        if isCancelling || Task.isCancelled {
+            result.state = .cancelled
+            result.detail = "Cancelled. Completed files remain on disk."
+            activity = result
+            canRetry = retryAction != nil
+            isCancelling = false
+            return
+        }
+        result.state = .succeeded
+        result.detail = message ?? statusMessage ?? "Finished."
+        activity = result
+        notifyCompletion(result)
+    }
+
+    private func reportFailure(_ message: String) {
+        var result = activity ?? AppActivity(title: "Needs attention", detail: message)
+        result.state = (isCancelling || Task.isCancelled) ? .cancelled : .failed
+        result.detail = result.state == .cancelled ? "Cancelled. Completed files remain on disk." : message
+        canRetry = retryAction != nil
+        isCancelling = false
+        activity = result
+        statusMessage = result.detail
+        if result.state == .failed { notifyCompletion(result) }
+    }
+
+    func cancelActivity() {
+        guard isBusy, jobTask != nil || trimTask != nil else { return }
+        isCancelling = true
+        jobTask?.cancel()
+        trimTask?.cancel()
+    }
+
+    var canCancel: Bool { isBusy && (isExportingTrim ? trimTask != nil : jobTask != nil) }
+
+    func retryActivity() {
+        guard !isBusy, canRetry else { return }
+        retryAction?()
+    }
+
+    func undoHistoryRemoval() {
+        let existing = Set(history.map(\.id))
+        history.append(contentsOf: removedHistory.filter { !existing.contains($0.id) })
+        history.sort { $0.createdAt > $1.createdAt }
+        removedHistory = []
+        historyStore.save(history)
+    }
+
+    func dismissActivity() {
+        guard activity?.isRunning != true else { return }
+        activity = nil
+        defaults.removeObject(forKey: "lastActivity")
+    }
+
+    func revealDownloadFolder() {
+        NSWorkspace.shared.open(preferences.downloadFolder)
     }
 
     func chooseDownloadFolder() {
@@ -67,6 +204,7 @@ final class AppModel: ObservableObject {
             return
         }
 
+        objectWillChange.send()
         preferences.downloadFolder = url
     }
 
@@ -81,13 +219,14 @@ final class AppModel: ObservableObject {
         pasteTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 150_000_000)
             guard !Task.isCancelled else { return }
-            await self?.beginResolutionSelection(candidate)
+            self?.jobTask = Task { [weak self] in await self?.beginResolutionSelection(candidate) }
         }
     }
 
     func submitInput() {
+        guard !isBusy else { return }
         pasteTask?.cancel()
-        Task { [weak self] in
+        jobTask = Task { [weak self] in
             guard let self else { return }
             await self.beginResolutionSelection(self.inputText)
         }
@@ -102,8 +241,9 @@ final class AppModel: ObservableObject {
         }
 
         pasteTask?.cancel()
+        guard !isBusy else { return }
         inputText = candidate
-        Task { [weak self] in
+        jobTask = Task { [weak self] in
             await self?.beginResolutionSelection(candidate)
         }
     }
@@ -115,7 +255,7 @@ final class AppModel: ObservableObject {
         resolutionPrompt = nil
         probeTask?.cancel()
         isRefiningResolutions = false
-        Task { [weak self] in
+        jobTask = Task { [weak self] in
             await self?.performDownload(sourceURL, formatSelector: resolution.formatSelector)
         }
     }
@@ -130,9 +270,10 @@ final class AppModel: ObservableObject {
 
     /// Handles local image files dragged onto the window — shows the format picker.
     func handleDroppedImageFiles(_ urls: [URL]) {
-        guard !urls.isEmpty else { return }
+        guard !urls.isEmpty, !isBusy else { return }
         pasteTask?.cancel()
         resolutionPrompt = nil
+        cancelConversion()
         pendingRemotePageURL = nil
         conversionPrompt = ConversionPrompt(
             source: .localFiles(urls),
@@ -144,22 +285,27 @@ final class AppModel: ObservableObject {
     /// Handles a PDF dropped onto the window — rasterizes every page, then shows the same
     /// format picker used for images so the pages can be saved as jpg/png/webp/avif.
     func handleDroppedPDF(_ url: URL) {
+        guard !isBusy else { return }
         pasteTask?.cancel()
         resolutionPrompt = nil
         conversionPrompt = nil
         pendingRemotePageURL = nil
 
-        Task { [weak self] in
+        jobTask = Task { [weak self] in
             await self?.beginPDFConversion(url)
         }
     }
 
     private func beginPDFConversion(_ pdfURL: URL) async {
+        retryAction = { [weak self] in self?.handleDroppedPDF(pdfURL) }
         isProbing = true
+        beginActivity(title: pdfURL.lastPathComponent, detail: "Reading PDF pages…")
+        defer { finishActivity(message: "PDF pages are ready. Choose an output format in the app.") }
         probingMessage = "Reading \(pdfURL.lastPathComponent)…"
 
         do {
             let pageURLs = try await pdfConverter.rasterizePages(of: pdfURL)
+            pdfWorkingDirectory = pageURLs.first?.deletingLastPathComponent()
             isProbing = false
             let baseName = pdfURL.deletingPathExtension().lastPathComponent
             conversionPrompt = ConversionPrompt(
@@ -169,45 +315,54 @@ final class AppModel: ObservableObject {
             )
         } catch {
             isProbing = false
-            statusMessage = error.localizedDescription
+            reportFailure(error.localizedDescription)
         }
     }
 
     /// Called when the user taps a format box. `format == nil` means keep the original (remote only).
-    func chooseConversionFormat(_ format: ImageFormat?, quality: Int) {
+    func chooseConversionFormat(_ format: ImageFormat?, quality: Int, indices: Set<Int>) {
         guard let prompt = conversionPrompt else { return }
         conversionPrompt = nil
 
-        Task { [weak self] in
+        jobTask = Task { [weak self] in
             guard let self else { return }
             switch prompt.source {
             case .localFiles(let urls):
                 guard let format else { return }
-                await self.performLocalConversion(urls, format: format, quality: quality)
+                await self.performLocalConversion(urls.enumerated().filter { indices.contains($0.offset) }.map(\.element), format: format, quality: quality)
             case .remoteImages(let urls):
                 if let format {
-                    await self.performRemoteConversion(urls, format: format, quality: quality, title: prompt.title)
+                    await self.performRemoteConversion(urls.enumerated().filter { indices.contains($0.offset) }.map(\.element), format: format, quality: quality, title: prompt.title)
                 } else {
-                    await self.performImageDownload(urls, title: prompt.title, sourceURL: self.pendingRemotePageURL ?? "")
+                    await self.performImageDownload(urls.enumerated().filter { indices.contains($0.offset) }.map(\.element), title: prompt.title, sourceURL: self.pendingRemotePageURL ?? "")
                 }
             }
         }
     }
 
     func cancelConversion() {
+        if let directory = pdfWorkingDirectory { try? FileManager.default.removeItem(at: directory) }
+        pdfWorkingDirectory = nil
         conversionPrompt = nil
+        canRetry = false
         pendingRemotePageURL = nil
     }
 
     private func performLocalConversion(_ urls: [URL], format: ImageFormat, quality: Int) async {
-        guard !isDownloading else { return }
+        guard !isBusy else { return }
+        retryAction = { [weak self] in
+            self?.jobTask = Task { [weak self] in await self?.performLocalConversion(urls, format: format, quality: quality) }
+        }
         isDownloading = true
+        beginActivity(title: "Convert to \(format.displayName)", detail: "Converting \(urls.count) image(s)…")
+        defer { finishActivity() }
         downloadProgress = 0
         statusMessage = urls.count > 1 ? "Converting \(urls.count) images…" : "Converting…"
 
         var savedURLs: [URL] = []
         do {
-            for url in urls {
+            for (index, url) in urls.enumerated() {
+                try Task.checkCancellation()
                 let output = try await imageConverter.convert(
                     sourceURL: url,
                     to: format,
@@ -215,18 +370,16 @@ final class AppModel: ObservableObject {
                     destinationFolder: preferences.downloadFolder
                 )
                 savedURLs.append(output)
-                // Pages rasterized from a dropped PDF live under the system temp
-                // directory — clean them up now that they've been converted.
-                if url.path.hasPrefix(FileManager.default.temporaryDirectory.path) {
-                    try? FileManager.default.removeItem(at: url)
-                }
+                downloadProgress = Double(index + 1) / Double(urls.count)
+
             }
             insertImageHistory(savedURLs, sourceURL: urls.first?.absoluteString ?? "")
             statusMessage = savedURLs.count > 1
                 ? "Converted \(savedURLs.count) images."
                 : "Converted to \(format.displayName) and copied."
         } catch {
-            statusMessage = error.localizedDescription
+            insertImageHistory(savedURLs, sourceURL: urls.first?.absoluteString ?? "")
+            reportFailure(error.localizedDescription)
         }
 
         isDownloading = false
@@ -234,8 +387,13 @@ final class AppModel: ObservableObject {
     }
 
     private func performRemoteConversion(_ imageURLs: [String], format: ImageFormat, quality: Int, title: String) async {
-        guard !isDownloading else { return }
+        guard !isBusy else { return }
+        retryAction = { [weak self] in
+            self?.jobTask = Task { [weak self] in await self?.performRemoteConversion(imageURLs, format: format, quality: quality, title: title) }
+        }
         isDownloading = true
+        beginActivity(title: title, detail: "Downloading and converting to \(format.displayName)…")
+        defer { finishActivity() }
         downloadProgress = 0
         statusMessage = imageURLs.count > 1 ? "Downloading & converting \(imageURLs.count) images…" : "Downloading & converting…"
 
@@ -243,8 +401,11 @@ final class AppModel: ObservableObject {
         var savedURLs: [URL] = []
         do {
             for (index, urlString) in imageURLs.enumerated() {
+                try Task.checkCancellation()
                 guard let url = URL(string: urlString) else { continue }
                 let (temporaryURL, _) = try await URLSession.shared.download(from: url)
+                defer { try? FileManager.default.removeItem(at: temporaryURL) }
+                try Task.checkCancellation()
                 let baseName = MediaDownloaderService.imageBaseName(title: title, index: index, total: imageURLs.count)
                 let output = try await imageConverter.convert(
                     sourceURL: temporaryURL,
@@ -262,7 +423,8 @@ final class AppModel: ObservableObject {
                 ? "Downloaded \(savedURLs.count) images as \(format.displayName)."
                 : "Downloaded as \(format.displayName) and copied."
         } catch {
-            statusMessage = error.localizedDescription
+            insertImageHistory(savedURLs, sourceURL: pageURL)
+            reportFailure(error.localizedDescription)
         }
 
         pendingRemotePageURL = nil
@@ -305,6 +467,7 @@ final class AppModel: ObservableObject {
     }
 
     func deleteHistoryItem(_ item: DownloadItem) {
+        removedHistory = [item]
         history.removeAll { $0.id == item.id }
         historyStore.save(history)
 
@@ -314,12 +477,17 @@ final class AppModel: ObservableObject {
     }
 
     func clearHistory() {
+        removedHistory = history
         history.removeAll()
         historyStore.save(history)
         activeTrimSession = nil
     }
 
     func checkForUpdates(manual: Bool) {
+        if Bundle.main.bundleIdentifier?.hasSuffix(".preview") == true {
+            if manual { statusMessage = "Preview builds are updated separately until you approve release." }
+            return
+        }
         if !manual {
             guard !didRunAutomaticUpdateCheck else { return }
             didRunAutomaticUpdateCheck = true
@@ -360,6 +528,22 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+    }
+
+    var isLibraryVisible: Bool { libraryWindow?.isVisible == true }
+
+    func showLibrary() {
+        if libraryWindow == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 540), styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
+            window.title = "Download It Library"
+            window.contentView = NSHostingView(rootView: LibraryView(model: self))
+            window.isReleasedWhenClosed = false
+            window.minSize = NSSize(width: 520, height: 360)
+            window.center()
+            libraryWindow = window
+        }
+        libraryWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func showSettings() {
@@ -409,32 +593,50 @@ final class AppModel: ObservableObject {
             throw TrimExportError.invalidRange
         }
 
-        let outputURL = await trimExporter.saveURL(for: session.fileURL, selection: selection)
-        return try await trimExporter.exportTrim(
-            sourceURL: session.fileURL,
-            selection: selection,
-            to: outputURL
-        )
+        guard !isBusy else { throw TrimExportError.processFailed("Wait for the current task to finish.") }
+        isExportingTrim = true
+        retryAction = { [weak self] in Task { try? await self?.saveActiveTrim(selection) } }
+        beginActivity(title: session.item.displayName, detail: "Saving trimmed video…")
+        defer { isExportingTrim = false; trimTask = nil }
+        do {
+            let outputURL = await trimExporter.saveURL(for: session.fileURL, selection: selection)
+            let exporter = trimExporter
+            let task = Task { try await exporter.exportTrim(sourceURL: session.fileURL, selection: selection, to: outputURL) }
+            trimTask = task
+            let result = try await task.value
+            finishActivity(message: "Trimmed video saved to \(result.deletingLastPathComponent().lastPathComponent).")
+            return result
+        } catch {
+            reportFailure(error.localizedDescription)
+            throw error
+        }
     }
 
     func copyActiveTrim(_ selection: TrimSelection) async throws {
-        guard let session = activeTrimSession else {
-            throw TrimExportError.invalidRange
+        guard let session = activeTrimSession else { throw TrimExportError.invalidRange }
+        guard !isBusy else { throw TrimExportError.processFailed("Wait for the current task to finish.") }
+        isExportingTrim = true
+        retryAction = { [weak self] in Task { try? await self?.copyActiveTrim(selection) } }
+        beginActivity(title: session.item.displayName, detail: "Exporting trimmed video…")
+        defer { isExportingTrim = false; trimTask = nil }
+        do {
+            let outputURL = try await trimExporter.temporaryURL(for: session.fileURL)
+            let exporter = trimExporter
+            let task = Task { try await exporter.exportTrim(sourceURL: session.fileURL, selection: selection, to: outputURL) }
+            trimTask = task
+            let trimmedURL = try await task.value
+            ClipboardService.copyFile(trimmedURL)
+            finishActivity(message: "Trimmed video copied.")
+        } catch {
+            reportFailure(error.localizedDescription)
+            throw error
         }
-
-        let outputURL = try await trimExporter.temporaryURL(for: session.fileURL)
-        let trimmedURL = try await trimExporter.exportTrim(
-            sourceURL: session.fileURL,
-            selection: selection,
-            to: outputURL
-        )
-        ClipboardService.copyFile(trimmedURL)
     }
 
     /// Shows quality boxes immediately, then refines them from the real lookup in the background.
     private func beginResolutionSelection(_ rawURL: String) async {
         let sourceURL = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !isDownloading else { return }
+        guard !isBusy else { return }
         guard URLValidator.looksLikeWebURL(sourceURL) else {
             statusMessage = "Enter a valid URL."
             return
@@ -510,7 +712,7 @@ final class AppModel: ObservableObject {
 
     /// Applies a completed lookup: refine the boxes, switch to the image format picker, or report nothing found.
     private func applyProbeResult(_ probe: VideoProbe, sourceURL: String, isInitial: Bool) {
-        guard !isDownloading else { return }
+        guard !isBusy else { return }
         // For a background refine, only act if the user is still viewing this link's boxes.
         if !isInitial {
             guard resolutionPrompt?.sourceURL == sourceURL else { return }
@@ -539,7 +741,8 @@ final class AppModel: ObservableObject {
         resolutionPrompt = ResolutionPrompt(
             sourceURL: sourceURL,
             title: probe.title ?? sourceURL,
-            options: VideoResolution.options(from: probe.heights)
+            options: VideoResolution.options(from: probe.heights),
+            thumbnailURL: probe.thumbnailURL
         )
         statusMessage = nil
     }
@@ -570,11 +773,11 @@ final class AppModel: ObservableObject {
     }
 
     /// Called when the user confirms the playlist download card.
-    func choosePlaylistDownload() {
+    func choosePlaylistDownload(_ indices: Set<Int>) {
         guard let prompt = playlistDownloadPrompt else { return }
         playlistDownloadPrompt = nil
-        Task { [weak self] in
-            await self?.performPlaylistDownload(prompt.entries, title: prompt.title, sourceURL: prompt.sourceURL)
+        jobTask = Task { [weak self] in
+            await self?.performPlaylistDownload(prompt.entries.enumerated().filter { indices.contains($0.offset) }.map(\.element), title: prompt.title, sourceURL: prompt.sourceURL)
         }
     }
 
@@ -584,8 +787,13 @@ final class AppModel: ObservableObject {
     }
 
     private func performPlaylistDownload(_ entries: [PlaylistEntry], title: String, sourceURL: String) async {
-        guard !isDownloading else { return }
+        guard !isBusy else { return }
+        retryAction = { [weak self] in
+            self?.jobTask = Task { [weak self] in await self?.performPlaylistDownload(entries, title: title, sourceURL: sourceURL) }
+        }
         isDownloading = true
+        beginActivity(title: title, detail: "Downloading playlist…")
+        defer { finishActivity() }
         downloadProgress = 0
         playlistDownloadStatus = PlaylistDownloadStatus(title: title, completed: 0, total: entries.count, currentItemTitle: nil)
 
@@ -625,7 +833,7 @@ final class AppModel: ObservableObject {
                 ? "Downloaded \(results.count) of \(entries.count) videos (\(skipped) skipped)."
                 : "Downloaded \(results.count) videos."
         } catch {
-            statusMessage = error.localizedDescription
+            reportFailure(error.localizedDescription)
         }
 
         playlistDownloadStatus = nil
@@ -684,17 +892,17 @@ final class AppModel: ObservableObject {
             )
         } catch {
             isProbing = false
-            statusMessage = error.localizedDescription
+            reportFailure(error.localizedDescription)
         }
     }
 
     /// Called when the user confirms their choice on the save-options card.
-    func chooseCollectionSaveMode(_ mode: CollectionSaveMode, imageFormat: ImageFormat?, quality: Int) {
+    func chooseCollectionSaveMode(_ mode: CollectionSaveMode, imageFormat: ImageFormat?, quality: Int, indices: Set<Int>) {
         guard let prompt = collectionDownloadPrompt else { return }
         collectionDownloadPrompt = nil
-        Task { [weak self] in
+        jobTask = Task { [weak self] in
             await self?.performCollectionBundleDownload(
-                prompt.items,
+                prompt.items.enumerated().filter { indices.contains($0.offset) }.map(\.element),
                 source: prompt.source,
                 title: prompt.title,
                 sourceURL: prompt.sourceURL,
@@ -719,9 +927,16 @@ final class AppModel: ObservableObject {
         imageFormat: ImageFormat?,
         quality: Int
     ) async {
-        guard !isDownloading else { return }
+        guard !isBusy else { return }
         isDownloading = true
+        beginActivity(title: title, detail: "Downloading collection…")
+        defer { finishActivity() }
         downloadProgress = 0
+        retryAction = { [weak self] in
+            self?.jobTask = Task { [weak self] in
+                await self?.performCollectionBundleDownload(items, source: source, title: title, sourceURL: sourceURL, saveMode: saveMode, imageFormat: imageFormat, quality: quality)
+            }
+        }
         collectionBundleStatus = CollectionBundleStatus(source: source, phase: .downloading, completed: 0, total: items.count, title: title, saveMode: saveMode, currentItemTitle: nil)
 
         do {
@@ -741,12 +956,16 @@ final class AppModel: ObservableObject {
                 }
             )
 
+            defer { try? FileManager.default.removeItem(at: workingDirectory) }
+            try Task.checkCancellation()
+
             // Convert images to the chosen format, if the user picked one other than "Original".
             if let imageFormat {
                 collectionBundleStatus = CollectionBundleStatus(source: source, phase: .converting, completed: 0, total: files.count, title: title, saveMode: saveMode, currentItemTitle: nil)
-                files = await convertImages(in: files, to: imageFormat, quality: quality, workingDirectory: workingDirectory)
+                files = try await convertImages(in: files, to: imageFormat, quality: quality, workingDirectory: workingDirectory)
             }
 
+            try Task.checkCancellation()
             collectionBundleStatus = CollectionBundleStatus(source: source, phase: .finishing, completed: items.count, total: items.count, title: title, saveMode: saveMode, currentItemTitle: nil)
 
             switch saveMode {
@@ -785,7 +1004,7 @@ final class AppModel: ObservableObject {
                 ? "\(verb) \(files.count) of \(items.count) items \(destination) (\(skipped) skipped)."
                 : "\(verb) \(files.count) items \(destination)."
         } catch {
-            statusMessage = error.localizedDescription
+            reportFailure(error.localizedDescription)
         }
 
         collectionBundleStatus = nil
@@ -795,9 +1014,10 @@ final class AppModel: ObservableObject {
 
     /// Converts every image among the downloaded files to the chosen format, in place
     /// within the working directory. Videos pass through untouched.
-    private func convertImages(in files: [URL], to format: ImageFormat, quality: Int, workingDirectory: URL) async -> [URL] {
+    private func convertImages(in files: [URL], to format: ImageFormat, quality: Int, workingDirectory: URL) async throws -> [URL] {
         var result: [URL] = []
         for file in files {
+            try Task.checkCancellation()
             guard Self.imageExtensions.contains(file.pathExtension.lowercased()) else {
                 result.append(file)
                 continue
@@ -900,9 +1120,14 @@ final class AppModel: ObservableObject {
     }
 
     private func performImageDownload(_ imageURLs: [String], title: String?, sourceURL: String) async {
-        guard !isDownloading else { return }
+        guard !isBusy else { return }
 
+        retryAction = { [weak self] in
+            self?.jobTask = Task { [weak self] in await self?.performImageDownload(imageURLs, title: title, sourceURL: sourceURL) }
+        }
         isDownloading = true
+        beginActivity(title: title ?? "Images", detail: "Downloading images…")
+        defer { finishActivity() }
         downloadProgress = 0
         statusMessage = imageURLs.count > 1 ? "Downloading \(imageURLs.count) images..." : "Downloading image..."
 
@@ -939,7 +1164,7 @@ final class AppModel: ObservableObject {
                 ? "Downloaded \(results.count) images and copied the first."
                 : "Downloaded and copied."
         } catch {
-            statusMessage = error.localizedDescription
+            reportFailure(error.localizedDescription)
         }
 
         isDownloading = false
@@ -947,9 +1172,14 @@ final class AppModel: ObservableObject {
     }
 
     private func performDownload(_ sourceURL: String, formatSelector: String?) async {
-        guard !isDownloading else { return }
+        guard !isBusy else { return }
 
+        retryAction = { [weak self] in
+            self?.jobTask = Task { [weak self] in await self?.performDownload(sourceURL, formatSelector: formatSelector) }
+        }
         isDownloading = true
+        beginActivity(title: probeCache[sourceURL]?.title ?? URL(string: sourceURL)?.host ?? "Video", detail: "Preparing download…")
+        defer { finishActivity() }
         downloadProgress = 0
         // No percentage yet while yt-dlp resolves the link — say so, rather than leaving
         // the spinner unexplained; this gets replaced by a live percentage below.
@@ -960,15 +1190,22 @@ final class AppModel: ObservableObject {
             let result = try await downloader.download(
                 sourceURL: sourceURL,
                 destinationFolder: preferences.downloadFolder,
-                formatSelector: formatSelector
+                formatSelector: formatSelector,
+                onTransfer: { [weak self] detail in
+                    Task { @MainActor in
+                        guard self?.activity?.isRunning == true else { return }
+                        self?.transferDetail = detail
+                    }
+                }
             ) { [weak self] progress in
                 Task { @MainActor in
-                    guard let self else { return }
+                    guard let self, self.isDownloading, self.activity?.isRunning == true else { return }
                     self.downloadProgress = progress
                     let percent = Int((progress * 100).rounded())
                     guard percent != lastShownPercent else { return }
                     lastShownPercent = percent
-                    self.statusMessage = percent >= 99 ? "Almost done…" : "Downloading… \(percent)%"
+                    self.statusMessage = percent >= 99 ? "Finishing download…" : "Downloading… \(percent)%"
+                    self.activity?.detail = self.statusMessage ?? "Downloading…"
                 }
             }
             let thumbnailPath = try? await thumbnailGenerator.thumbnailPath(for: result.fileURL)
@@ -987,7 +1224,7 @@ final class AppModel: ObservableObject {
             inputText = ""
             statusMessage = "Downloaded and copied."
         } catch {
-            statusMessage = error.localizedDescription
+            reportFailure(error.localizedDescription)
         }
 
         isDownloading = false

@@ -4,8 +4,10 @@ import SwiftUI
 /// video: lets the user confirm downloading every entry before anything starts.
 struct PlaylistOptionsPickerView: View {
     let prompt: PlaylistDownloadPrompt
-    let onConfirm: () -> Void
+    let onConfirm: (Set<Int>) -> Void
     let onCancel: () -> Void
+
+    @State private var selected = Set<Int>()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -33,18 +35,23 @@ struct PlaylistOptionsPickerView: View {
                 .help("Cancel")
             }
 
+            Text("Up to 50 entries are loaded per playlist.").font(.caption).foregroundStyle(.secondary)
+            BatchSelectionView(titles: prompt.entries.map { $0.title ?? $0.webpageURL }, selected: $selected)
+
             Button {
-                onConfirm()
+                onConfirm(selected)
             } label: {
-                Text("Download All \(prompt.entries.count) Videos")
+                Text("Download \(selected.count) Videos")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
                     .frame(height: 38)
             }
             .buttonStyle(.plain)
+            .disabled(selected.isEmpty)
             .background(Color.appAccent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
+        .onAppear { selected = Set(0..<prompt.entries.count) }
         .padding(20)
         .frame(width: 680)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))

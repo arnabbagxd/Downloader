@@ -4,12 +4,12 @@ final class HistoryStore {
     private let fileManager: FileManager
     private let historyURL: URL
 
-    init(fileManager: FileManager = .default) {
+    init(fileManager: FileManager = .default, historyURL: URL? = nil) {
         self.fileManager = fileManager
         let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support", isDirectory: true)
         let directory = support.appendingPathComponent("MediaDownloader", isDirectory: true)
-        historyURL = directory.appendingPathComponent("history.json")
+        self.historyURL = historyURL ?? directory.appendingPathComponent("history.json")
     }
 
     func load() -> [DownloadItem] {

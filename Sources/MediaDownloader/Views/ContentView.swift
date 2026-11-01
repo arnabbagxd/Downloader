@@ -3,6 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var model: AppModel
     @State private var isDropTargeted = false
     @State private var inputAppeared = false
@@ -29,6 +30,7 @@ struct ContentView: View {
             )
             .frame(width: 0, height: 0)
 
+            ScrollView {
             VStack(spacing: 12) {
                 DownloadInputView(
                     text: $model.inputText,
@@ -45,6 +47,19 @@ struct ContentView: View {
                 )
                 .opacity(inputAppeared ? 1 : 0)
                 .blur(radius: inputAppeared ? 0 : 7)
+
+                HStack {
+                    Button(action: model.revealDownloadFolder) {
+                        Label(model.downloadFolderPath, systemImage: "folder").lineLimit(1).truncationMode(.middle)
+                    }.help("Open destination folder")
+                    Button("Change…", action: model.chooseDownloadFolder).disabled(model.isBusy)
+                    Spacer()
+                    Button("Library", action: model.showLibrary)
+                    if !model.removedHistory.isEmpty { Button("Undo Removal", action: model.undoHistoryRemoval) }
+                    if model.canCancel { Button(model.isCancelling ? "Cancelling…" : "Cancel", action: model.cancelActivity).disabled(model.isCancelling) }
+                }.font(.caption).frame(width: 640)
+                    .padding(.horizontal, 20).padding(.vertical, 10)
+                    .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
 
                 if model.isProbing {
                     ProbingCard(message: model.probingMessage)
@@ -132,6 +147,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .padding(.top, 56)
             .padding(.bottom, 56)
+            }
 
             DropHighlightOverlay(isActive: isDropTargeted)
                 .allowsHitTesting(false)
@@ -210,6 +226,7 @@ struct ContentView: View {
     }
 
     private func runActivationAnimation() {
+        if reduceMotion { inputAppeared = true; trimAppeared = true; historyAppeared = true; return }
         let generation = nextTransitionGeneration()
         var transaction = Transaction()
         transaction.disablesAnimations = true
@@ -245,6 +262,7 @@ struct ContentView: View {
     }
 
     private func runTrimModeTransition(to session: ActiveTrimSession?) {
+        if reduceMotion { displayedTrimSession = session; trimAppeared = true; historyAppeared = true; return }
         guard session != nil || displayedTrimSession != nil else {
             return
         }
@@ -426,20 +444,13 @@ struct ContentView: View {
     }
 
     private func handleKeyboardEvent(_ event: NSEvent) -> Bool {
-        if event.keyCode == 49, displayedTrimSession != nil {
+        if NSApp.keyWindow?.firstResponder is NSTextView { return false }
+        if NSApp.keyWindow?.title != "Download It" { return false }
+        if event.keyCode == 49, displayedTrimSession != nil, historySelectionIndex != nil {
             trimPlaybackCommand += 1
             return true
         }
 
-        if event.keyCode == 48 {
-            if historySelectionIndex == nil {
-                guard !model.history.isEmpty else { return false }
-                focusFirstHistoryItem()
-            } else {
-                focusInputField()
-            }
-            return true
-        }
 
         if model.hotKeyShortcut(for: .activateApp).matches(event) {
             focusInputField()

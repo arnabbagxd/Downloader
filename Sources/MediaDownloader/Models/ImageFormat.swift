@@ -43,18 +43,22 @@ enum ImageFormat: String, CaseIterable, Identifiable {
         switch self {
         case .webp:
             // libwebp takes quality directly, 0–100.
-            return ["-c:v", "libwebp", "-quality", "\(clampedQuality)"]
+            return ["-c:v", "libwebp", "-quality", "\(clampedQuality)", "-compression_level", "3"]
         case .jpg:
             // mjpeg quality is -q:v 2 (best) … 31 (worst); map 100→2, 0→31.
             let qscale = Int((Double(100 - clampedQuality) / 100.0 * 29.0).rounded()) + 2
             return ["-q:v", "\(qscale)"]
         case .png:
-            // Lossless; just squeeze the file a bit. Quality slider is ignored.
-            return ["-compression_level", "9"]
+            // Remains lossless; avoid spending time chasing the smallest possible file.
+            return ["-compression_level", "3"]
         case .avif:
             // libaom-av1 crf is 0 (best) … 63 (worst); map 100→0, 0→63.
             let crf = Int((Double(100 - clampedQuality) / 100.0 * 63.0).rounded())
-            return ["-c:v", "libaom-av1", "-crf", "\(crf)", "-b:v", "0", "-pix_fmt", "yuv420p"]
+            return [
+                "-c:v", "libaom-av1", "-crf", "\(crf)", "-b:v", "0",
+                "-cpu-used", "6", "-row-mt", "1",
+                "-threads", "4", "-pix_fmt", "yuv420p"
+            ]
         }
     }
 }

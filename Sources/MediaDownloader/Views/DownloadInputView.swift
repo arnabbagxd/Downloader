@@ -13,7 +13,6 @@ struct DownloadInputView: View {
     let onClearHistory: () -> Void
     let onOpenSettings: () -> Void
     let onFocusHistory: () -> Void
-    @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -42,9 +41,6 @@ struct DownloadInputView: View {
                 onClearHistory: onClearHistory,
                 onOpenSettings: onOpenSettings
             )
-            .opacity(isHovering ? 1 : 0)
-            .allowsHitTesting(isHovering)
-            .animation(.easeOut(duration: 0.14), value: isHovering)
         }
         .padding(.leading, 20)
         .padding(.trailing, 12)
@@ -55,7 +51,6 @@ struct DownloadInputView: View {
                 .strokeBorder(.white.opacity(0.16), lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.22), radius: 28, x: 0, y: 18)
-        .onHover { isHovering = $0 }
     }
 }
 
@@ -73,7 +68,8 @@ private struct InputSettingsButton: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(Color.primary.opacity(0.58))
-        .help("Download folder: \(folderName)")
+        .help("Settings · Download folder: \(folderName)")
+        .accessibilityLabel("Settings and download folder")
     }
 
     private func showMenu() {
@@ -86,7 +82,7 @@ private struct InputSettingsButton: View {
         menu.addItem(actionItem(title: "Settings", iconName: "settings", action: onOpenSettings))
         menu.addItem(actionItem(title: "Change Folder", iconName: "folder", action: onChooseFolder))
         menu.addItem(.separator())
-        menu.addItem(actionItem(title: "Clear History", iconName: "trash-2", action: onClearHistory))
+        menu.addItem(actionItem(title: "Remove All from History", iconName: "trash-2", action: onClearHistory))
 
         let pointInWindow = NSPoint(
             x: NSEvent.mouseLocation.x - contentView.window!.frame.minX,

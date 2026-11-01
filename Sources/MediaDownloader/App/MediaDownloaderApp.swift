@@ -22,12 +22,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: SpotlightWindow?
     private var setupWindow: SpotlightWindow?
     private var setupModel: ToolSetupModel?
+    private var menuBarController: MenuBarController?
     private lazy var activationHotKey = GlobalHotKeyManager { [weak self] in
         self?.presentReadyWindow(activate: true)
     }
     private var hotKeyObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        menuBarController = MenuBarController(model: model) { [weak self] in
+            self?.presentReadyWindow(activate: true)
+        }
+        installMainMenu()
         activationHotKey.registerActivationHotKey(preferences.hotKeyShortcut(for: .activateApp))
         hotKeyObserver = NotificationCenter.default.addObserver(
             forName: .mediaDownloaderHotKeysDidChange,
@@ -43,7 +48,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         presentReadyWindow(activate: true)
     }
 
+    private func installMainMenu() {
+        let menu = NSMenu()
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu(title: "Download It")
+        let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        settings.target = self
+        appMenu.addItem(settings)
+        let activity = NSMenuItem(title: "Activity", action: #selector(openActivity), keyEquivalent: "a")
+        activity.keyEquivalentModifierMask = [.command, .shift]
+        activity.target = self
+        appMenu.addItem(activity)
+        let library = NSMenuItem(title: "Library", action: #selector(openLibrary), keyEquivalent: "l")
+        library.target = self
+        appMenu.addItem(library)
+        appMenu.addItem(.separator())
+        appMenu.addItem(NSMenuItem(title: "Quit Download It", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        appItem.submenu = appMenu
+        menu.addItem(appItem)
+        let editItem = NSMenuItem()
+        let edit = NSMenu(title: "Edit")
+        for (title, action, key) in [("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] {
+            edit.addItem(NSMenuItem(title: title, action: Selector(action), keyEquivalent: key))
+        }
+        editItem.submenu = edit
+        menu.addItem(editItem)
+        NSApp.mainMenu = menu
+    }
+
+    @objc private func openSettings() { model.showSettings() }
+    @objc private func openLibrary() { model.showLibrary() }
+    @objc private func openActivity() { menuBarController?.showActivity() }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard model.isBusy else { return .terminateNow }
+        model.statusMessage = "Cancel the current task or wait for it to finish before quitting."
+        menuBarController?.showActivity()
+        return .terminateCancel
+    }
+
     func applicationDidBecomeActive(_ notification: Notification) {
+        guard menuBarController?.isShowingPopover != true, !model.isLibraryVisible else { return }
         presentReadyWindow(activate: false)
     }
 
@@ -53,6 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if model.isLibraryVisible { model.showLibrary(); return true }
         presentReadyWindow(activate: true)
         return true
     }
