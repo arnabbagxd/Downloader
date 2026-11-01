@@ -9,7 +9,6 @@ struct SwipeToRemoveRow<Content: View>: View {
     @ViewBuilder let content: () -> Content
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var offset: CGFloat = 0
-    @State private var dragOrigin: CGFloat?
     private let actionWidth: CGFloat = 76
 
     var body: some View {
@@ -32,31 +31,29 @@ struct SwipeToRemoveRow<Content: View>: View {
                 .frame(maxWidth: .infinity, minHeight: 46)
                 .offset(x: offset)
                 .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 12)
-                    .onChanged { value in
-                        guard abs(value.translation.width) > abs(value.translation.height) else { return }
-                        if dragOrigin == nil { dragOrigin = offset; revealedID = id }
-                        offset = bounded((dragOrigin ?? 0) + value.translation.width)
-                    }
-                    .onEnded { _ in settle() })
         }
         .frame(height: 46)
         .clipped()
-        .background(HorizontalScrollCapture(onDelta: { delta in
-            revealedID = id
-            offset = bounded(offset + delta)
-        }, onEnd: settle))
+        .background {
+            GeometryReader { geometry in
+                HorizontalScrollCapture(onDelta: { delta in
+                    revealedID = id
+                    offset = bounded(offset + delta)
+                }, onEnd: settle)
+                .frame(width: geometry.size.width, height: geometry.size.height)
+            }
+        }
         .contextMenu { Button("Remove from History", role: .destructive, action: onRemove) }
         .accessibilityAction(named: Text("Remove from History"), onRemove)
         .onChange(of: revealedID) { _, value in
-            if value != id { animate { offset = 0; dragOrigin = nil } }
+            if value != id { animate { offset = 0 } }
         }
     }
 
     private func bounded(_ value: CGFloat) -> CGFloat { min(0, max(-actionWidth, value)) }
     private func settle() {
         let reveal = offset < -actionWidth / 3
-        animate { offset = reveal ? -actionWidth : 0; dragOrigin = nil }
+        animate { offset = reveal ? -actionWidth : 0 }
         revealedID = reveal ? id : nil
     }
     private func animate(_ action: () -> Void) {
@@ -64,7 +61,7 @@ struct SwipeToRemoveRow<Content: View>: View {
     }
 }
 
-/// SwiftUI drag gestures cover a mouse; native scroll events cover two-finger trackpad swipes.
+/// Handle horizontal input before SwiftUI context menus and popover dragging consume it.
 private struct HorizontalScrollCapture: NSViewRepresentable {
     let onDelta: (CGFloat) -> Void
     let onEnd: () -> Void
@@ -79,14 +76,44 @@ private struct HorizontalScrollCapture: NSViewRepresentable {
         var onDelta: ((CGFloat) -> Void)?
         var onEnd: (() -> Void)?
         private var monitor: Any?
+        private var endTimer: Timer?
         private var tracking = false
+        private var mouseOrigin: NSPoint?
+        private var previousMouseX: CGFloat = 0
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             stop()
             guard window != nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
                 guard let self, event.window === self.window else { return event }
-                let inside = self.bounds.contains(self.convert(event.locationInWindow, from: nil))
+                let inside = self.bounds.contains(self.convert(event.locationInWindow, from: nil)); fflush(stdout)
+                if event.type == .leftMouseDown {
+                    self.mouseOrigin = inside ? event.locationInWindow : nil
+                    self.previousMouseX = event.locationInWindow.x
+                    return event
+                }
+                if event.type == .leftMouseDragged, let origin = self.mouseOrigin {
+                    let point = event.locationInWindow
+                    if !self.tracking {
+                        guard abs(point.x - origin.x) > 8,
+                              abs(point.x - origin.x) > abs(point.y - origin.y) else { return event }
+                        self.tracking = true
+                    }
+                    self.onDelta?(point.x - self.previousMouseX)
+                    self.previousMouseX = point.x
+                    return nil
+                }
+                if event.type == .leftMouseUp {
+                    self.mouseOrigin = nil
+                    if self.tracking {
+                        self.tracking = false
+                        self.onEnd?()
+                        return nil
+                    }
+                    return event
+                }
+                guard event.type == .scrollWheel else { return event }
                 if self.tracking && (event.phase.contains(.ended) || event.phase.contains(.cancelled)) {
                     self.tracking = false
                     self.onEnd?()
@@ -96,11 +123,24 @@ private struct HorizontalScrollCapture: NSViewRepresentable {
                       abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) else { return event }
                 self.tracking = true
                 self.onDelta?(event.scrollingDeltaX)
-                if event.phase.isEmpty { self.tracking = false; self.onEnd?() }
+                self.endTimer?.invalidate()
+                if event.phase.isEmpty {
+                    // Mouse wheels and some trackpads send several small unphased events.
+                    let timer = Timer(timeInterval: 0.15, repeats: false) { [weak self] _ in
+                        MainActor.assumeIsolated {
+                            self?.tracking = false
+                            self?.onEnd?()
+                        }
+                    }
+                    self.endTimer = timer
+                    RunLoop.main.add(timer, forMode: .common)
+                }
                 return nil
             }
         }
         func stop() {
+            endTimer?.invalidate()
+            endTimer = nil
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
             tracking = false
