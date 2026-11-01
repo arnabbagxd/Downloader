@@ -48,18 +48,39 @@ struct ContentView: View {
                 .opacity(inputAppeared ? 1 : 0)
                 .blur(radius: inputAppeared ? 0 : 7)
 
-                HStack {
-                    Button(action: model.revealDownloadFolder) {
-                        Label(model.downloadFolderPath, systemImage: "folder").lineLimit(1).truncationMode(.middle)
-                    }.help("Open destination folder")
-                    Button("Change…", action: model.chooseDownloadFolder).disabled(model.isBusy)
-                    Spacer()
-                    Button("Library", action: model.showLibrary)
-                    if !model.removedHistory.isEmpty { Button("Undo Removal", action: model.undoHistoryRemoval) }
-                    if model.canCancel { Button(model.isCancelling ? "Cancelling…" : "Cancel", action: model.cancelActivity).disabled(model.isCancelling) }
-                }.font(.caption).frame(width: 640)
-                    .padding(.horizontal, 20).padding(.vertical, 10)
-                    .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
+                HStack(spacing: 14) {
+                    Menu {
+                        Button("Open Folder", systemImage: "folder", action: model.revealDownloadFolder)
+                        Button("Choose Folder…", systemImage: "folder.badge.gearshape", action: model.chooseDownloadFolder)
+                            .disabled(model.isBusy)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "folder")
+                            Text("Save to")
+                            Text(URL(fileURLWithPath: model.downloadFolderPath).lastPathComponent)
+                                .fontWeight(.medium).lineLimit(1).truncationMode(.middle)
+                        }
+                    }
+                    .menuStyle(.borderlessButton).fixedSize(horizontal: false, vertical: true)
+                    .help("Save to \(model.downloadFolderPath). Click to open or change the folder.")
+                    .accessibilityLabel("Save to \(URL(fileURLWithPath: model.downloadFolderPath).lastPathComponent)")
+                    Spacer(minLength: 12)
+                    if !model.removedHistory.isEmpty {
+                        Button("Undo Removal", action: model.undoHistoryRemoval)
+                    }
+                    if model.canCancel {
+                        Button(model.isCancelling ? "Cancelling…" : "Cancel", action: model.cancelActivity)
+                            .disabled(model.isCancelling)
+                    }
+                    Button(action: model.showLibrary) {
+                        Label("Library", systemImage: "square.stack")
+                    }.help("Show all files")
+                }
+                .buttonStyle(.borderless)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(width: 656)
+                .padding(.horizontal, 12).padding(.vertical, 4)
 
                 if model.isProbing {
                     ProbingCard(message: model.probingMessage)
