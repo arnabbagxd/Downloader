@@ -149,10 +149,7 @@ struct MenuBarActivityView: View {
     private func recentFile(_ item: DownloadItem) -> some View {
         let exists = FileManager.default.fileExists(atPath: item.filePath)
         return HStack(spacing: 10) {
-            Image(systemName: item.isZipFile ? "archivebox" : item.isImageFile ? "photo" : "film")
-                .font(.title3).foregroundStyle(.secondary)
-                .frame(width: 38, height: 38)
-                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+            recentThumbnail(item)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.displayName).font(.callout).lineLimit(1).help(item.displayName)
@@ -167,6 +164,25 @@ struct MenuBarActivityView: View {
                 .buttonStyle(.plain).foregroundStyle(.secondary).disabled(!exists)
                 .help("Show in Finder").accessibilityLabel("Show \(item.displayName) in Finder")
         }
+    }
+
+    private func recentThumbnail(_ item: DownloadItem) -> some View {
+        let image = item.thumbnailPath.flatMap { NSImage(contentsOfFile: $0) }
+            ?? (item.isImageFile ? NSImage(contentsOfFile: item.filePath) : nil)
+        return ZStack {
+            RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05))
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 38, height: 38)
+            } else {
+                Image(systemName: item.isZipFile ? "archivebox" : item.isImageFile ? "photo" : "film")
+                    .font(.title3).foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 38, height: 38)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     private func pasteLink() {
