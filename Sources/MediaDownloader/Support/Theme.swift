@@ -26,3 +26,24 @@ extension LinearGradient {
         endPoint: .bottom
     )
 }
+
+/// System glass on Tahoe, native material on older supported macOS versions.
+struct NativeGlassSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    var radius: CGFloat = 20
+    @ViewBuilder func body(content: Content) -> some View {
+        if reduceTransparency {
+            content.background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: radius))
+        } else if #available(macOS 26.0, *) {
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius))
+        } else {
+            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: radius))
+        }
+    }
+}
+
+extension View {
+    func nativeGlass(radius: CGFloat = 20) -> some View {
+        modifier(NativeGlassSurface(radius: radius))
+    }
+}

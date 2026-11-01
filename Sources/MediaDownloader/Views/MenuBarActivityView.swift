@@ -5,16 +5,17 @@ struct MenuBarActivityView: View {
     @ObservedObject var model: AppModel
     let onOpenApp: () -> Void
     let onSettings: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var clipboardFeedback: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 18) {
             HStack {
                 Label("Download It", systemImage: "arrow.down.circle.fill")
-                    .font(.headline)
+                    .font(.title3.weight(.semibold))
                 Spacer()
-                Button(action: onSettings) { Image(systemName: "gearshape") }
-                    .buttonStyle(.borderless)
+                Button(action: onSettings) { Image(systemName: "gearshape").frame(width: 28, height: 28) }
+                    .buttonStyle(.plain).nativeGlass(radius: 16)
                     .help("Settings")
                     .accessibilityLabel("Settings")
             }
@@ -39,16 +40,18 @@ struct MenuBarActivityView: View {
             }
             HStack {
                 Button(action: pasteLink) { Label("Paste Link", systemImage: "link") }
+                    .buttonStyle(.bordered).controlSize(.large)
+                    .buttonBorderShape(.capsule)
                     .disabled(model.isBusy || !ToolManager.isReady)
-                Spacer()
                 Button("Open App", action: onOpenApp)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .buttonBorderShape(.capsule)
                     .keyboardShortcut(.return, modifiers: [])
             }
 
             Divider()
             HStack {
-                Text("RECENT FILES").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text("Recent Files").font(.headline)
                 Spacer()
                 Button(action: model.revealDownloadFolder) { Image(systemName: "folder") }
                     .buttonStyle(.borderless).help("Open download folder")
@@ -62,9 +65,12 @@ struct MenuBarActivityView: View {
                     recentFile(item)
                 }
             }
-            Button("Open Library", action: model.showLibrary)
+            Button(action: model.showLibrary) {
+                HStack { Text("Show All Files"); Spacer(); Image(systemName: "chevron.right").font(.caption.weight(.semibold)) }
+                    .padding(.horizontal, 14).padding(.vertical, 11)
+            }.buttonStyle(.plain).nativeGlass(radius: 14)
             Toggle("Completion notifications", isOn: Binding(get: { model.notificationsEnabled }, set: model.setNotifications))
-                .toggleStyle(.checkbox).font(.caption)
+                .toggleStyle(.switch).controlSize(.small).font(.callout)
             Divider()
             HStack {
                 Text(model.isBusy ? "Working in the background" : "Files stay on your Mac")
@@ -78,7 +84,8 @@ struct MenuBarActivityView: View {
         }
         .padding(20)
         .frame(width: 360)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(.regularMaterial)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: model.activity?.state)
         .tint(.appAccent)
     }
 
@@ -134,16 +141,19 @@ struct MenuBarActivityView: View {
                 .buttonStyle(.borderless)
             }
         }
-        .padding(12)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 20))
     }
 
     private func recentFile(_ item: DownloadItem) -> some View {
         let exists = FileManager.default.fileExists(atPath: item.filePath)
         return HStack(spacing: 10) {
             Image(systemName: item.isZipFile ? "archivebox" : item.isImageFile ? "photo" : "film")
-                .foregroundStyle(.secondary).frame(width: 20).accessibilityHidden(true)
+                .font(.title3).foregroundStyle(.secondary)
+                .frame(width: 38, height: 38)
+                .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.displayName).font(.callout).lineLimit(1).help(item.displayName)
                 Text(exists ? item.sourceName : "File moved or removed")
@@ -151,10 +161,10 @@ struct MenuBarActivityView: View {
             }
             Spacer(minLength: 0)
             Button { model.copyFile(item) } label: { Image(systemName: "doc.on.doc") }
-                .buttonStyle(.borderless).disabled(!exists)
+                .buttonStyle(.plain).foregroundStyle(.secondary).disabled(!exists)
                 .help("Copy file").accessibilityLabel("Copy \(item.displayName)")
             Button { model.revealInFinder(item) } label: { Image(systemName: "folder") }
-                .buttonStyle(.borderless).disabled(!exists)
+                .buttonStyle(.plain).foregroundStyle(.secondary).disabled(!exists)
                 .help("Show in Finder").accessibilityLabel("Show \(item.displayName) in Finder")
         }
     }
