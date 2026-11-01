@@ -24,6 +24,11 @@ final class MenuBarController: NSObject {
             onSettings: { [weak self] in
                 self?.popover.performClose(nil)
                 model.showSettings()
+            },
+            onOpenLibrary: { [weak self] in
+                self?.popover.performClose(nil)
+                // Let the popover relinquish its key window before presenting Library.
+                DispatchQueue.main.async { model.showLibrary() }
             }
         ))
         if let button = statusItem.button {

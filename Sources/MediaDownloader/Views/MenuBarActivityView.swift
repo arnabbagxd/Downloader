@@ -5,6 +5,7 @@ struct MenuBarActivityView: View {
     @ObservedObject var model: AppModel
     let onOpenApp: () -> Void
     let onSettings: () -> Void
+    let onOpenLibrary: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var clipboardFeedback: String?
 
@@ -65,7 +66,7 @@ struct MenuBarActivityView: View {
                     recentFile(item)
                 }
             }
-            Button(action: model.showLibrary) {
+            Button(action: onOpenLibrary) {
                 HStack { Text("Show All Files"); Spacer(); Image(systemName: "chevron.right").font(.caption.weight(.semibold)) }
                     .padding(.horizontal, 14).padding(.vertical, 11)
             }.buttonStyle(.plain).nativeGlass(radius: 14)

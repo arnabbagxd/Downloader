@@ -58,7 +58,7 @@ struct LibraryView: View {
                 }
             }
             .background(Color(nsColor: .controlBackgroundColor))
-            .navigationTitle("Library")
+            .navigationTitle("Download It — Library")
             .searchable(text: $query, prompt: "Search files")
             .toolbar {
                 ToolbarItem {
@@ -67,7 +67,12 @@ struct LibraryView: View {
                 }
             }
             .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: kind)
-        }.frame(minWidth: 640, minHeight: 400)
+        }
+        .onChange(of: model.libraryPresentationID) { _, _ in
+            query = ""
+            kind = "All"
+        }
+        .frame(minWidth: 640, minHeight: 400)
     }
 }
 
