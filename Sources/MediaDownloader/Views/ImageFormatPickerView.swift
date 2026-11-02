@@ -1,4 +1,5 @@
 import SwiftUI
+import ImageIO
 
 /// Compact format cards with optional batch selection and explicit confirmation.
 struct ImageFormatPickerView: View {
@@ -25,6 +26,9 @@ struct ImageFormatPickerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
+                if prompt.count == 1, let url = urls.first {
+                    SelectionThumbnail(url: url)
+                }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(heading)
                         .font(.system(size: 16, weight: .semibold))
@@ -51,7 +55,7 @@ struct ImageFormatPickerView: View {
 
             if prompt.count > 1 {
                 DisclosureGroup("Choose images · \(selected.count) of \(prompt.count) selected") {
-                    BatchSelectionView(titles: urls.map(\.lastPathComponent), selected: $selected)
+                    BatchSelectionView(titles: urls.map(\.lastPathComponent), selected: $selected, thumbnailURLs: urls)
                         .padding(.top, 8)
                 }.font(.callout)
             }
@@ -171,6 +175,7 @@ struct MediaPreview: View {
 struct BatchSelectionView: View {
     let titles: [String]
     @Binding var selected: Set<Int>
+    var thumbnailURLs: [URL] = []
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -180,15 +185,68 @@ struct BatchSelectionView: View {
                 Button("Clear") { selected = [] }
             }
             ScrollView {
-                VStack(alignment: .leading) {
+                LazyVStack(alignment: .leading, spacing: 6) {
                     ForEach(titles.indices, id: \.self) { index in
-                        Toggle(titles[index].isEmpty ? "Item \(index + 1)" : titles[index], isOn: Binding(
+                        Toggle(isOn: Binding(
                             get: { selected.contains(index) },
                             set: { if $0 { selected.insert(index) } else { selected.remove(index) } }
-                        )).toggleStyle(.checkbox).lineLimit(1)
+                        )) {
+                            HStack(spacing: 7) {
+                                if thumbnailURLs.indices.contains(index) {
+                                    SelectionThumbnail(url: thumbnailURLs[index])
+                                }
+                                Text(titles[index].isEmpty ? "Item \(index + 1)" : titles[index])
+                                    .lineLimit(1).truncationMode(.middle)
+                            }
+                        }.toggleStyle(.checkbox)
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }.frame(maxHeight: 120)
+        }
+    }
+}
+
+
+/// Decode only a tiny preview, rather than loading every full-resolution image in a batch.
+private struct SelectionThumbnail: View {
+    let url: URL
+    @State private var localImage: NSImage?
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.06))
+            if url.isFileURL {
+                if let localImage {
+                    Image(nsImage: localImage).resizable().scaledToFill()
+                } else {
+                    Image(systemName: "photo").font(.caption).foregroundStyle(.secondary)
+                }
+            } else {
+                AsyncImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Image(systemName: "photo").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .frame(width: 24, height: 24)
+        .clipShape(RoundedRectangle(cornerRadius: 4))
+        .accessibilityHidden(true)
+        .task(id: url) {
+            localImage = nil
+            guard url.isFileURL else { return }
+            let work = Task.detached(priority: .utility) { () -> CGImage? in
+                guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+                return CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: 64,
+                    kCGImageSourceShouldCacheImmediately: true
+                ] as CFDictionary)
+            }
+            let image = await withTaskCancellationHandler(operation: { await work.value }, onCancel: { work.cancel() })
+            guard !Task.isCancelled else { return }
+            if let image { localImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height)) }
         }
     }
 }
