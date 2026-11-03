@@ -6,6 +6,7 @@ struct LibraryView: View {
     @ObservedObject var model: AppModel
     @State private var query = ""
     @State private var kind = "All"
+    @State private var sidebarVisible = true
     private var items: [DownloadItem] {
         model.history.filter { item in
             (query.isEmpty || item.displayName.localizedCaseInsensitiveContains(query) || item.sourceName.localizedCaseInsensitiveContains(query)) &&
@@ -16,7 +17,66 @@ struct LibraryView: View {
     private let categories = ["All", "Videos", "Images", "Archives"]
     private let symbols = ["All": "square.stack.3d.up", "Videos": "film", "Images": "photo", "Archives": "archivebox"]
     var body: some View {
-        NavigationSplitView {
+        VStack(spacing: 0) {
+            controls
+            Divider()
+            HStack(spacing: 0) {
+                if sidebarVisible {
+                    sidebar
+                        .frame(width: 190)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                    Divider()
+                }
+                detail
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .onChange(of: model.libraryPresentationID) { _, _ in
+            query = ""
+            kind = "All"
+        }
+        .frame(minWidth: 640, minHeight: 400)
+    }
+
+    private var controls: some View {
+        HStack(spacing: 12) {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                    sidebarVisible.toggle()
+                }
+            } label: {
+                Image(systemName: "sidebar.left")
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.bordered)
+            .help(sidebarVisible ? "Hide sidebar" : "Show sidebar")
+            .accessibilityLabel(sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
+            Spacer(minLength: 0)
+            Button(action: model.revealDownloadFolder) {
+                Image(systemName: "folder")
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.bordered)
+            .help("Open download folder")
+            .accessibilityLabel("Open Downloads")
+            HStack(spacing: 7) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                TextField("Search files", text: $query)
+                    .textFieldStyle(.plain)
+                    .accessibilityLabel("Search files")
+            }
+            .padding(.horizontal, 11)
+            .frame(width: 280, height: 30)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 50)
+    }
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
             List(selection: $kind) {
                 Section("Library") {
                     ForEach(categories, id: \.self) { category in
@@ -27,52 +87,41 @@ struct LibraryView: View {
                 }
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 160, ideal: 190, max: 230)
-            .safeAreaInset(edge: .bottom) {
-                Button(action: model.revealDownloadFolder) {
-                    Label("Downloads Folder", systemImage: "folder")
-                }.buttonStyle(.borderless).padding(16)
+            Button(action: model.revealDownloadFolder) {
+                Label("Downloads Folder", systemImage: "folder")
             }
-        } detail: {
-            VStack(spacing: 0) {
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(kind == "All" ? "All Files" : kind).font(.largeTitle.weight(.bold))
-                        Text("\(items.count) item\(items.count == 1 ? "" : "s")")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if !model.removedHistory.isEmpty {
-                        Button("Undo Removal", action: model.undoHistoryRemoval).keyboardShortcut("z")
-                    }
-                }.padding(24)
-                if items.isEmpty {
-                    ContentUnavailableView(query.isEmpty ? "Your library starts here" : "No matching files", systemImage: query.isEmpty ? "tray" : "magnifyingglass", description: Text(query.isEmpty ? "Downloaded and converted files appear here." : "Try another title or file type."))
-                        .frame(maxHeight: .infinity)
-                } else {
-                    List(items) { item in
-                        LibraryFileRow(item: item, model: model)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
-                    }.listStyle(.inset).scrollContentBackground(.hidden)
-                }
-            }
-            .background(Color(nsColor: .controlBackgroundColor))
-            .navigationTitle("Download It — Library")
-            .searchable(text: $query, prompt: "Search files")
-            .toolbar {
-                ToolbarItem {
-                    Button(action: model.revealDownloadFolder) { Label("Open Downloads", systemImage: "folder") }
-                        .help("Open download folder")
-                }
-            }
-            .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: kind)
+            .buttonStyle(.borderless)
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .onChange(of: model.libraryPresentationID) { _, _ in
-            query = ""
-            kind = "All"
+    }
+
+    private var detail: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(kind == "All" ? "All Files" : kind).font(.largeTitle.weight(.bold))
+                    Text("\(items.count) item\(items.count == 1 ? "" : "s")")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if !model.removedHistory.isEmpty {
+                    Button("Undo Removal", action: model.undoHistoryRemoval).keyboardShortcut("z")
+                }
+            }.padding(24)
+            if items.isEmpty {
+                ContentUnavailableView(query.isEmpty ? "Your library starts here" : "No matching files", systemImage: query.isEmpty ? "tray" : "magnifyingglass", description: Text(query.isEmpty ? "Downloaded and converted files appear here." : "Try another title or file type."))
+                    .frame(maxHeight: .infinity)
+            } else {
+                List(items) { item in
+                    LibraryFileRow(item: item, model: model)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                }.listStyle(.inset).scrollContentBackground(.hidden)
+            }
         }
-        .frame(minWidth: 640, minHeight: 400)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .animation(reduceMotion ? nil : .smooth(duration: 0.22), value: kind)
     }
 }
 

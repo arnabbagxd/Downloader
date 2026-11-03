@@ -542,8 +542,6 @@ final class AppModel: ObservableObject {
             window.contentView = NSHostingView(rootView: LibraryView(model: self))
             window.isReleasedWhenClosed = false
             window.minSize = NSSize(width: 660, height: 440)
-            window.toolbarStyle = .unified
-            window.titlebarAppearsTransparent = true
             window.center()
             libraryWindow = window
         }
