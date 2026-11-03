@@ -219,6 +219,7 @@ private struct IconButton: View {
 private struct ThumbnailView: View {
     let path: String?
     var isZip: Bool = false
+    @State private var image: NSImage?
 
     var body: some View {
         GeometryReader { proxy in
@@ -245,10 +246,14 @@ private struct ThumbnailView: View {
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .aspectRatio(4.0 / 3.0, contentMode: .fit)
-    }
-
-    private var image: NSImage? {
-        guard let path else { return nil }
-        return NSImage(contentsOfFile: path)
+        .task(id: path) {
+            image = nil
+            guard let path else { return }
+            let data = await Task.detached(priority: .utility) {
+                try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe)
+            }.value
+            guard !Task.isCancelled, let data else { return }
+            image = NSImage(data: data)
+        }
     }
 }

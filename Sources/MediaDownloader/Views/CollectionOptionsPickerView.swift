@@ -5,12 +5,12 @@ import SwiftUI
 /// for any images inside it.
 struct CollectionOptionsPickerView: View {
     let prompt: CollectionDownloadPrompt
-    let onConfirm: (CollectionSaveMode, ImageFormat?, Int) -> Void
+    let onConfirm: (CollectionSaveMode, ImageFormat?, Int, Set<Int>) -> Void
     let onCancel: () -> Void
 
     @State private var saveMode: CollectionSaveMode = .zip
     @State private var imageFormat: ImageFormat? = nil // nil == keep original
-    @State private var quality: Double = 80
+    @State private var quality: Double = 90
 
     private var countSummary: String {
         var parts: [String] = []
@@ -18,6 +18,8 @@ struct CollectionOptionsPickerView: View {
         if prompt.imageCount > 0 { parts.append("\(prompt.imageCount) image\(prompt.imageCount == 1 ? "" : "s")") }
         return parts.joined(separator: ", ")
     }
+
+    @State private var selected = Set<Int>()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -97,8 +99,11 @@ struct CollectionOptionsPickerView: View {
                 }
             }
 
+            Text("Profiles and boards load up to 30 items at a time.").font(.caption).foregroundStyle(.secondary)
+            BatchSelectionView(titles: prompt.items.map { $0.title ?? $0.webpageURL }, selected: $selected)
+
             Button {
-                onConfirm(saveMode, imageFormat, Int(quality))
+                onConfirm(saveMode, imageFormat, Int(quality), selected)
             } label: {
                 Text("Download")
                     .font(.system(size: 14, weight: .semibold))
@@ -107,8 +112,10 @@ struct CollectionOptionsPickerView: View {
                     .frame(height: 38)
             }
             .buttonStyle(.plain)
+            .disabled(selected.isEmpty)
             .background(Color.appAccent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
+        .onAppear { selected = Set(0..<prompt.items.count) }
         .padding(20)
         .frame(width: 680)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))

@@ -14,7 +14,7 @@ final class TrimExportServiceTests: XCTestCase {
         // ffmpeg itself is now the executable, so the arguments start at "-y".
         XCTAssertEqual(arguments.first, "-y")
         XCTAssertFalse(arguments.contains("-c") && arguments.contains("copy"))
-        XCTAssertContainsSequence(arguments, ["-i", sourceURL.path, "-ss", "1.234"])
+        XCTAssertContainsSequence(arguments, ["-ss", "1.234", "-i", sourceURL.path])
         XCTAssertContainsSequence(arguments, ["-t", "2.222"])
         XCTAssertContainsSequence(arguments, ["-c:v", "libx264"])
         XCTAssertContainsSequence(arguments, ["-pix_fmt", "yuv420p"])

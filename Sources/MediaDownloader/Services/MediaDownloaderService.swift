@@ -24,16 +24,21 @@ actor MediaDownloaderService {
         sourceURL: String,
         destinationFolder: URL,
         formatSelector: String? = nil,
+        onTransfer: (@Sendable (String) -> Void)? = nil,
         onProgress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> DownloadResult {
         guard let ytDlp = ToolManager.ytDlpPath else { throw MediaDownloaderError.missingTool("yt-dlp") }
         guard let ffmpeg = ToolManager.ffmpegPath else { throw MediaDownloaderError.missingTool("ffmpeg") }
         try fileManager.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
 
+        let staging = destinationFolder.appendingPathComponent(".download-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: staging) }
         let startDate = Date()
         var arguments = [
             "--no-playlist",
             "--newline",
+            "--progress",
             "--restrict-filenames",
             // Download in parallel pieces for a real throughput boost on fragmented sources.
             "--concurrent-fragments", "4",
@@ -52,7 +57,7 @@ actor MediaDownloaderService {
         }
 
         arguments += [
-            "--paths", destinationFolder.path,
+            "--paths", staging.path,
             "--output", "%(title).180B [%(id)s].%(ext)s",
             "--print", "after_move:%(filepath)s",
             "--print", "after_move:%(title)s",
@@ -63,6 +68,9 @@ actor MediaDownloaderService {
         // even though yt-dlp reports separate 0-100% passes for video and audio.
         let highestProgress = ProgressTracker()
         let output = try await runProcess(executable: ytDlp, arguments: arguments) { line in
+            if line.contains("[download]"), let range = line.range(of: " at ") {
+                onTransfer?(String(line[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines))
+            }
             guard let onProgress, let fraction = Self.parseProgress(from: line) else { return }
             if let advanced = highestProgress.advance(to: fraction) {
                 onProgress(advanced)
@@ -74,9 +82,12 @@ actor MediaDownloaderService {
             .filter { !$0.isEmpty }
 
         let filePath = lines.first(where: { $0.hasPrefix("/") && fileManager.fileExists(atPath: $0) })
-        let fileURL = try filePath.map(URL.init(fileURLWithPath:)) ?? newestMediaFile(in: destinationFolder, after: startDate)
+        let fileURL = try filePath.map(URL.init(fileURLWithPath:)) ?? newestMediaFile(in: staging, after: startDate)
         let title = lines.last(where: { !$0.hasPrefix("/") }) ?? fileURL.deletingPathExtension().lastPathComponent
-        return DownloadResult(fileURL: fileURL, title: title)
+        try Task.checkCancellation()
+        let destination = Self.uniqueDestination(in: destinationFolder, baseName: fileURL.deletingPathExtension().lastPathComponent, fileExtension: fileURL.pathExtension, fileManager: fileManager)
+        try fileManager.moveItem(at: fileURL, to: destination)
+        return DownloadResult(fileURL: destination, title: title)
     }
 
     /// Fetches a link's title, the distinct video heights it offers (highest first), and —
@@ -131,7 +142,7 @@ actor MediaDownloaderService {
         let rawTitle = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = (rawTitle?.isEmpty == false) ? rawTitle : nil
 
-        return VideoProbe(title: title, heights: heights.sorted(by: >), imageURLs: imageURLs)
+        return VideoProbe(title: title, heights: heights.sorted(by: >), imageURLs: imageURLs, thumbnailURL: json["thumbnail"] as? String)
     }
 
     /// Downloads one or more images straight over HTTPS into the destination folder.
@@ -146,6 +157,7 @@ actor MediaDownloaderService {
         var results: [DownloadResult] = []
 
         for (index, urlString) in imageURLs.enumerated() {
+            try Task.checkCancellation()
             guard let url = URL(string: urlString) else { continue }
 
             let (temporaryURL, response) = try await URLSession.shared.download(from: url)
@@ -163,6 +175,7 @@ actor MediaDownloaderService {
             onProgress?(Double(index + 1) / Double(imageURLs.count))
         }
 
+        try Task.checkCancellation()
         guard !results.isEmpty else {
             throw MediaDownloaderError.missingOutputFile
         }
@@ -234,6 +247,7 @@ actor MediaDownloaderService {
         var results: [DownloadResult] = []
 
         for (index, entry) in entries.enumerated() {
+            try Task.checkCancellation()
             onItemStart?(index, entries.count, entry.title)
             if let result = try? await download(
                 sourceURL: entry.webpageURL,
@@ -244,6 +258,7 @@ actor MediaDownloaderService {
             }
         }
 
+        try Task.checkCancellation()
         guard !results.isEmpty else {
             throw MediaDownloaderError.missingOutputFile
         }
@@ -350,10 +365,13 @@ actor MediaDownloaderService {
         let workingDirectory = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try fileManager.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
 
+        var succeeded = false
+        defer { if !succeeded { try? fileManager.removeItem(at: workingDirectory) } }
         var savedFiles: [URL] = []
         let total = items.count
 
         for (index, item) in items.enumerated() {
+            try Task.checkCancellation()
             onItemStart?(index, total, item.title)
 
             if item.isImage, let imageURLString = item.imageURL, let imageURL = URL(string: imageURLString) {
@@ -369,11 +387,13 @@ actor MediaDownloaderService {
             onItemFinish?(index + 1, total)
         }
 
+        try Task.checkCancellation()
         guard !savedFiles.isEmpty else {
             try? fileManager.removeItem(at: workingDirectory)
             throw MediaDownloaderError.missingOutputFile
         }
 
+        succeeded = true
         return (savedFiles, workingDirectory)
     }
 
@@ -513,6 +533,8 @@ actor MediaDownloaderService {
         arguments: [String],
         onLine: (@Sendable (String) -> Void)? = nil
     ) async throws -> String {
+        let cancellation = CancellableProcess()
+        return try await withTaskCancellationHandler {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             let stdout = Pipe()
@@ -549,11 +571,12 @@ actor MediaDownloaderService {
             }
 
             do {
-                try process.run()
+                try cancellation.start(process)
             } catch {
                 continuation.resume(throwing: error)
             }
         }
+        } onCancel: { cancellation.cancel() }
     }
 
     /// Extracts a 0.0-1.0 fraction from a yt-dlp progress line like "[download]  42.3% of ...".

@@ -1,0 +1,23 @@
+name: Build activity app
+
+on:
+  push:
+    branches:
+      - codex/menu-bar-activity
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build universal app
+        run: ./script/package_free.sh
+      - name: Archive app bundle
+        run: ditto -c -k --keepParent 'dist/release/Download It.app' dist/release/DownloadIt-app.zip
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: DownloadIt-app
+          path: dist/release/DownloadIt-app.zip
+          if-no-files-found: error

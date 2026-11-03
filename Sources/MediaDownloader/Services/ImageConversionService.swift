@@ -1,4 +1,6 @@
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 enum ImageConversionError: LocalizedError {
     case ffmpegUnavailable
@@ -25,17 +27,33 @@ actor ImageConversionService {
         destinationFolder: URL,
         preferredBaseName: String? = nil
     ) async throws -> URL {
-        guard let ffmpeg = ToolManager.ffmpegPath else { throw ImageConversionError.ffmpegUnavailable }
+        try Task.checkCancellation()
         try fileManager.createDirectory(at: destinationFolder, withIntermediateDirectories: true)
 
         let baseName = preferredBaseName ?? sourceURL.deletingPathExtension().lastPathComponent
         let destination = uniqueDestination(in: destinationFolder, baseName: baseName, fileExtension: format.fileExtension)
 
-        var arguments = ["-y", "-i", sourceURL.path]
+        // PDF rasterization already produces lossless PNGs. Copying those bytes
+        // avoids decoding and encoding every page a second time.
+        if format == .png,
+           let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
+           CGImageSourceGetType(source) as String? == UTType.png.identifier,
+           CGImageSourceGetCount(source) == 1 {
+            try fileManager.copyItem(at: sourceURL, to: destination)
+            return destination
+        }
+
+        guard let ffmpeg = ToolManager.ffmpegPath else { throw ImageConversionError.ffmpegUnavailable }
+        var arguments = ["-y", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", sourceURL.path]
         arguments += format.ffmpegArguments(quality: quality)
         arguments.append(destination.path)
 
-        try await runProcess(executable: ffmpeg, arguments: arguments)
+        do {
+            try await MediaConversionProcess.run(executable: ffmpeg, arguments: arguments)
+        } catch {
+            try? fileManager.removeItem(at: destination)
+            throw ImageConversionError.conversionFailed(error.localizedDescription)
+        }
         return destination
     }
 
@@ -49,30 +67,4 @@ actor ImageConversionService {
         return candidate
     }
 
-    private func runProcess(executable: String, arguments: [String]) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let process = Process()
-            let stderr = Pipe()
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = arguments
-            process.environment = DependencyChecker.processEnvironment
-            process.standardOutput = Pipe()
-            process.standardError = stderr
-
-            process.terminationHandler = { process in
-                if process.terminationStatus == 0 {
-                    continuation.resume()
-                } else {
-                    let message = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                    continuation.resume(throwing: ImageConversionError.conversionFailed(message))
-                }
-            }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
-    }
 }

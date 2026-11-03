@@ -19,6 +19,7 @@ struct PasteAwareTextField: NSViewRepresentable {
         textField.isBordered = false
         textField.isBezeled = false
         textField.drawsBackground = false
+        textField.setAccessibilityLabel("Media link")
         textField.isEditable = true
         textField.isSelectable = true
         textField.font = .systemFont(ofSize: 21, weight: .regular)
@@ -73,8 +74,7 @@ struct PasteAwareTextField: NSViewRepresentable {
             }
 
             if commandSelector == #selector(NSResponder.insertTab(_:)) {
-                onTab()
-                return true
+                return false
             }
 
             return false

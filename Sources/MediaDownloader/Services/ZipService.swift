@@ -36,10 +36,15 @@ actor ZipService {
         try? fileManager.removeItem(at: destinationZipURL)
         try fileManager.createDirectory(at: destinationZipURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
+        do {
         try await runProcess(executable: "/usr/bin/ditto", arguments: [
             "--norsrc", "-c", "-k", stagingDir.path, destinationZipURL.path
         ])
 
+        } catch {
+            try? fileManager.removeItem(at: destinationZipURL)
+            throw error
+        }
         return destinationZipURL
     }
 
@@ -54,28 +59,6 @@ actor ZipService {
     }
 
     private func runProcess(executable: String, arguments: [String]) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let process = Process()
-            let stderr = Pipe()
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = arguments
-            process.standardOutput = Pipe()
-            process.standardError = stderr
-
-            process.terminationHandler = { process in
-                if process.terminationStatus == 0 {
-                    continuation.resume()
-                } else {
-                    let message = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-                    continuation.resume(throwing: ZipServiceError.zippingFailed(message))
-                }
-            }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
+        try await MediaConversionProcess.run(executable: executable, arguments: arguments)
     }
 }

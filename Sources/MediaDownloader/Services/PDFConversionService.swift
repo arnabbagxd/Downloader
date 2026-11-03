@@ -1,5 +1,7 @@
 import AppKit
 import PDFKit
+import ImageIO
+import UniformTypeIdentifiers
 
 enum PDFConversionError: LocalizedError {
     case unreadablePDF
@@ -34,11 +36,17 @@ actor PDFConversionService {
         let workingDirectory = fileManager.temporaryDirectory.appendingPathComponent("pdf-\(UUID().uuidString)", isDirectory: true)
         try fileManager.createDirectory(at: workingDirectory, withIntermediateDirectories: true)
 
+        var succeeded = false
+        defer { if !succeeded { try? fileManager.removeItem(at: workingDirectory) } }
         var pageURLs: [URL] = []
 
         for index in 0..<document.pageCount {
-            guard let page = document.page(at: index),
-                  let destination = renderPage(page, index: index, baseName: baseName, pageCount: document.pageCount, into: workingDirectory) else {
+            try Task.checkCancellation()
+            let destination: URL? = autoreleasepool {
+                guard let page = document.page(at: index) else { return nil }
+                return renderPage(page, index: index, baseName: baseName, pageCount: document.pageCount, into: workingDirectory)
+            }
+            guard let destination else {
                 continue
             }
             pageURLs.append(destination)
@@ -49,6 +57,7 @@ actor PDFConversionService {
             throw PDFConversionError.noPages
         }
 
+        succeeded = true
         return pageURLs
     }
 
@@ -60,20 +69,25 @@ actor PDFConversionService {
         )
 
         let image = page.thumbnail(of: pixelSize, for: .mediaBox)
-        guard let tiffData = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData),
-              let pngData = bitmap.representation(using: .png, properties: [:]) else {
+        // Feed the rendered pixels directly into ImageIO; a TIFF encode/decode
+        // round trip adds time and large transient allocations for every page.
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             return nil
         }
 
         let pageName = pageCount > 1 ? "\(baseName) page \(index + 1)" : baseName
         let destination = workingDirectory.appendingPathComponent(pageName).appendingPathExtension("png")
 
-        do {
-            try pngData.write(to: destination)
-            return destination
-        } catch {
+        guard let writer = CGImageDestinationCreateWithURL(
+            destination as CFURL, UTType.png.identifier as CFString, 1, nil
+        ) else {
             return nil
         }
+        CGImageDestinationAddImage(writer, cgImage, nil)
+        guard CGImageDestinationFinalize(writer) else {
+            try? fileManager.removeItem(at: destination)
+            return nil
+        }
+        return destination
     }
 }
