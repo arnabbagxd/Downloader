@@ -94,8 +94,8 @@ struct MenuBarActivityView: View {
                     .frame(width: 24)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Ready when you are").font(.system(size: 14, weight: .semibold))
-                    Text("Download a link or convert a file in the app.")
+                    Text("Save media from a link").font(.system(size: 15, weight: .semibold))
+                    Text("Paste a link, or open the app to convert a file.")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
@@ -219,10 +219,11 @@ struct MenuBarActivityView: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(model.isBusy || !ToolManager.isReady)
-                Button("Open App", action: onOpenApp)
-                    .buttonStyle(.borderedProminent)
-                    .frame(maxWidth: .infinity)
-                    .keyboardShortcut(.return, modifiers: [])
+                Button(action: onOpenApp) {
+                    Text("Open App").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.return, modifiers: [])
             }
             .controlSize(.regular)
             .buttonBorderShape(.roundedRectangle)
@@ -237,7 +238,10 @@ struct MenuBarActivityView: View {
     }
 
     private var recentFiles: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let available = model.history.filter { FileManager.default.fileExists(atPath: $0.filePath) }
+        let missingCount = model.history.count - available.count
+        let recent = Array(available.prefix(3))
+        return VStack(alignment: .leading, spacing: 0) {
             Divider().padding(.bottom, 16)
             HStack(spacing: 8) {
                 Text("Recent Files").font(.system(size: 13, weight: .semibold))
@@ -261,14 +265,27 @@ struct MenuBarActivityView: View {
             }
             .padding(.bottom, 6)
             if model.history.isEmpty {
-                Text("Completed files appear here.")
+                Text("Completed files will appear here.")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 18)
+            } else if recent.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("No recent files available")
+                        .font(.system(size: 12, weight: .medium))
+                    Text("\(missingCount) saved \(missingCount == 1 ? "entry points" : "entries point") to files that were moved or removed. Review them in Library.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+                .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+                .padding(.vertical, 8)
             } else {
-                ForEach(Array(model.history.prefix(3))) { item in
+                ForEach(recent) { item in
                     recentFile(item)
-                    if item.id != model.history.prefix(3).last?.id {
+                    if item.id != recent.last?.id {
                         Divider().padding(.leading, 46)
                     }
                 }
@@ -381,13 +398,17 @@ struct MenuBarActivityView: View {
     private var footer: some View {
         VStack(spacing: 12) {
             Divider()
-            Toggle("Completion notifications", isOn: Binding(
-                get: { model.notificationsEnabled },
-                set: model.setNotifications
-            ))
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .font(.system(size: 12))
+            HStack {
+                Text("Completion notifications").font(.system(size: 12))
+                Spacer()
+                Toggle("Completion notifications", isOn: Binding(
+                    get: { model.notificationsEnabled },
+                    set: model.setNotifications
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+            }
             HStack {
                 Text(model.isBusy ? "Working in the background" : "Files stay on your Mac")
                     .font(.system(size: 11))
@@ -425,7 +446,11 @@ private struct ActivitySurface: ViewModifier {
         content
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+            }
     }
 }
 
