@@ -63,9 +63,27 @@ final class MenuBarController: NSObject {
             popover.performClose(nil)
         } else {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            positionPopover(below: button)
+            DispatchQueue.main.async { [weak self, weak button] in
+                guard let self, let button, self.popover.isShown else { return }
+                self.positionPopover(below: button)
+            }
             NSApp.activate(ignoringOtherApps: true)
             popover.contentViewController?.view.window?.makeKey()
         }
+    }
+
+    private func positionPopover(below button: NSStatusBarButton) {
+        guard let anchorWindow = button.window,
+              let popoverWindow = popover.contentViewController?.view.window,
+              let screen = anchorWindow.screen else { return }
+
+        let anchor = anchorWindow.convertToScreen(button.convert(button.bounds, to: nil))
+        let visible = screen.visibleFrame.insetBy(dx: 8, dy: 8)
+        let height = popoverWindow.frame.height
+        let desiredY = anchor.minY - height - 4
+        let y = min(max(desiredY, visible.minY), max(visible.minY, visible.maxY - height))
+        popoverWindow.setFrameOrigin(NSPoint(x: popoverWindow.frame.minX, y: y))
     }
 
     private func refresh() {

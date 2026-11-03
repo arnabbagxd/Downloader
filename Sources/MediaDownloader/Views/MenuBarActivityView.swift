@@ -10,8 +10,13 @@ struct MenuBarActivityView: View {
     @State private var clipboardFeedback: String?
     @State private var revealedRecentID: UUID?
 
+    private var maxContentHeight: CGFloat {
+        let shortestScreen = NSScreen.screens.map(\.visibleFrame.height).min() ?? 700
+        return min(480, max(220, shortestScreen - 140))
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(spacing: 0) {
             HStack {
                 Label("Download It", systemImage: "arrow.down.circle.fill")
                     .font(.title3.weight(.semibold))
@@ -21,81 +26,90 @@ struct MenuBarActivityView: View {
                     .help("Settings")
                     .accessibilityLabel("Settings")
             }
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            .padding(.bottom, 18)
 
-            if model.isProbing || model.isRefiningResolutions {
-                HStack(spacing: 10) {
-                    ProgressView().controlSize(.small)
-                    Text(model.isProbing ? model.probingMessage : "Checking exact qualities…").font(.callout)
-                }
-            } else if let activity = model.activity {
-                activityCard(activity)
-            } else {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Ready when you are").font(.subheadline.weight(.semibold))
-                    Text("Download a link or convert a file in the app.")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-            }
-
-            if let clipboardFeedback {
-                Text(clipboardFeedback).font(.callout).foregroundStyle(.secondary)
-            }
-            HStack {
-                Button(action: pasteLink) { Label("Paste Link", systemImage: "link") }
-                    .buttonStyle(.bordered).controlSize(.large)
-                    .buttonBorderShape(.capsule)
-                    .disabled(model.isBusy || !ToolManager.isReady)
-                Button("Open App", action: onOpenApp)
-                    .buttonStyle(.borderedProminent).controlSize(.large)
-                    .buttonBorderShape(.capsule)
-                    .keyboardShortcut(.return, modifiers: [])
-            }
-
-            Divider()
-            HStack {
-                Text("Recent Files").font(.headline)
-                Spacer()
-                if !model.removedHistory.isEmpty {
-                    Button("Undo") {
-                        withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) { model.undoHistoryRemoval() }
-                    }.buttonStyle(.borderless).help("Restore removed history")
-                }
-                Button(action: model.revealDownloadFolder) { Image(systemName: "folder") }
-                    .buttonStyle(.borderless).help("Open download folder")
-                    .accessibilityLabel("Open download folder")
-            }
-            if model.history.isEmpty {
-                Text("Your completed downloads will appear here.")
-                    .font(.callout).foregroundStyle(.secondary)
-            } else {
-                ForEach(Array(model.history.prefix(3))) { item in
-                    SwipeToRemoveRow(id: item.id, revealedID: $revealedRecentID, onRemove: {
-                        withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) {
-                            model.deleteHistoryItem(item)
-                            revealedRecentID = nil
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    if model.isProbing || model.isRefiningResolutions {
+                        HStack(spacing: 10) {
+                            ProgressView().controlSize(.small)
+                            Text(model.isProbing ? model.probingMessage : "Checking exact qualities…").font(.callout)
                         }
-                    }) { recentFile(item) }
-                    .transition(reduceMotion ? .identity : .asymmetric(insertion: .opacity, removal: .move(edge: .leading).combined(with: .opacity)))
+                    } else if let activity = model.activity {
+                        activityCard(activity)
+                    } else {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("Ready when you are").font(.subheadline.weight(.semibold))
+                            Text("Download a link or convert a file in the app.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if let clipboardFeedback {
+                        Text(clipboardFeedback).font(.callout).foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Button(action: pasteLink) { Label("Paste Link", systemImage: "link") }
+                            .buttonStyle(.bordered).controlSize(.large)
+                            .buttonBorderShape(.capsule)
+                            .disabled(model.isBusy || !ToolManager.isReady)
+                        Button("Open App", action: onOpenApp)
+                            .buttonStyle(.borderedProminent).controlSize(.large)
+                            .buttonBorderShape(.capsule)
+                            .keyboardShortcut(.return, modifiers: [])
+                    }
+
+                    Divider()
+                    HStack {
+                        Text("Recent Files").font(.headline)
+                        Spacer()
+                        if !model.removedHistory.isEmpty {
+                            Button("Undo") {
+                                withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) { model.undoHistoryRemoval() }
+                            }.buttonStyle(.borderless).help("Restore removed history")
+                        }
+                        Button(action: model.revealDownloadFolder) { Image(systemName: "folder") }
+                            .buttonStyle(.borderless).help("Open download folder")
+                            .accessibilityLabel("Open download folder")
+                    }
+                    if model.history.isEmpty {
+                        Text("Your completed downloads will appear here.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        ForEach(Array(model.history.prefix(3))) { item in
+                            SwipeToRemoveRow(id: item.id, revealedID: $revealedRecentID, onRemove: {
+                                withAnimation(reduceMotion ? nil : .smooth(duration: 0.25)) {
+                                    model.deleteHistoryItem(item)
+                                    revealedRecentID = nil
+                                }
+                            }) { recentFile(item) }
+                            .transition(reduceMotion ? .identity : .asymmetric(insertion: .opacity, removal: .move(edge: .leading).combined(with: .opacity)))
+                        }
+                    }
+                    Button(action: onOpenLibrary) {
+                        HStack { Text("Show All Files"); Spacer(); Image(systemName: "chevron.right").font(.caption.weight(.semibold)) }
+                            .padding(.horizontal, 14).padding(.vertical, 11)
+                    }.buttonStyle(.plain).nativeGlass(radius: 14)
+                    Toggle("Completion notifications", isOn: Binding(get: { model.notificationsEnabled }, set: model.setNotifications))
+                        .toggleStyle(.switch).controlSize(.small).font(.callout)
+                    Divider()
+                    HStack {
+                        Text(model.isBusy ? "Working in the background" : "Files stay on your Mac")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Quit") { NSApp.terminate(nil) }
+                            .buttonStyle(.borderless)
+                            .disabled(model.isBusy)
+                            .help(model.isBusy ? "Wait for the current task to finish before quitting" : "Quit Download It")
+                    }
                 }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
             }
-            Button(action: onOpenLibrary) {
-                HStack { Text("Show All Files"); Spacer(); Image(systemName: "chevron.right").font(.caption.weight(.semibold)) }
-                    .padding(.horizontal, 14).padding(.vertical, 11)
-            }.buttonStyle(.plain).nativeGlass(radius: 14)
-            Toggle("Completion notifications", isOn: Binding(get: { model.notificationsEnabled }, set: model.setNotifications))
-                .toggleStyle(.switch).controlSize(.small).font(.callout)
-            Divider()
-            HStack {
-                Text(model.isBusy ? "Working in the background" : "Files stay on your Mac")
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("Quit") { NSApp.terminate(nil) }
-                    .buttonStyle(.borderless)
-                    .disabled(model.isBusy)
-                    .help(model.isBusy ? "Wait for the current task to finish before quitting" : "Quit Download It")
-            }
+            .frame(maxHeight: maxContentHeight)
         }
-        .padding(20)
         .frame(width: 360)
         .background(.regularMaterial)
         .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: model.activity?.state)
