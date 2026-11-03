@@ -6,13 +6,16 @@ struct MenuBarActivityView: View {
     let onOpenApp: () -> Void
     let onSettings: () -> Void
     let onOpenLibrary: () -> Void
+    let statusButton: NSStatusBarButton?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var clipboardFeedback: String?
     @State private var revealedRecentID: UUID?
 
     private var maxContentHeight: CGFloat {
-        let shortestScreen = NSScreen.screens.map(\.visibleFrame.height).min() ?? 700
-        return min(480, max(220, shortestScreen - 140))
+        let displayHeight = statusButton?.window?.screen?.visibleFrame.height
+            ?? NSScreen.main?.visibleFrame.height
+            ?? 700
+        return min(540, max(220, displayHeight - 140))
     }
 
     var body: some View {

@@ -32,7 +32,8 @@ final class MenuBarController: NSObject {
                 self?.popover.performClose(nil)
                 // Let the popover relinquish its key window before presenting Library.
                 DispatchQueue.main.async { model.showLibrary() }
-            }
+            },
+            statusButton: statusItem.button
         ))
         if let button = statusItem.button {
             button.target = self
