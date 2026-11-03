@@ -129,10 +129,11 @@ private struct LibraryFileRow: View {
     let item: DownloadItem
     @ObservedObject var model: AppModel
     @State private var metadata = ""
+    @State private var thumbnail: NSImage?
     private var exists: Bool { FileManager.default.fileExists(atPath: item.filePath) }
     var body: some View {
         HStack(spacing: 16) {
-            if let path = item.thumbnailPath, let image = NSImage(contentsOfFile: path) {
+            if let image = thumbnail {
                 Image(nsImage: image).resizable().scaledToFit().frame(width: 64, height: 56).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10)).clipShape(RoundedRectangle(cornerRadius: 10)).accessibilityHidden(true)
             } else {
                 Image(systemName: item.isZipFile ? "archivebox" : item.isImageFile ? "photo" : "film").frame(width: 64, height: 56).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10)).clipShape(RoundedRectangle(cornerRadius: 10)).accessibilityHidden(true)
@@ -159,6 +160,15 @@ private struct LibraryFileRow: View {
             Button("Copy File") { model.copyFile(item) }.disabled(!exists)
             Button("Show in Finder") { model.revealInFinder(item) }.disabled(!exists)
             Button("Remove from History") { model.deleteHistoryItem(item) }
+        }
+        .task(id: item.thumbnailPath) {
+            thumbnail = nil
+            guard let path = item.thumbnailPath else { return }
+            let data = await Task.detached(priority: .utility) {
+                try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe)
+            }.value
+            guard !Task.isCancelled, let data else { return }
+            thumbnail = NSImage(data: data)
         }
         .task(id: item.filePath) {
             let url = URL(fileURLWithPath: item.filePath)
